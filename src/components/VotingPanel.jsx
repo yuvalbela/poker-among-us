@@ -1,7 +1,20 @@
 import { useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase.js'
+import { ChatButton } from './ActionPanel.jsx'
 
-export default function VotingPanel({ room, players, hands, me, roundNumber, isAdmin, onReveal }) {
+/**
+ * Voting panel — players guess who the traitor is.
+ * Layout is intentionally stable: each player tile is a fixed-height row
+ * with the voters list rendered ON THE SIDE of the name (truncated to one line),
+ * so adding/removing votes doesn't grow the tile.
+ *
+ * Footer is a single line: status text · admin reveal button · chat button.
+ * Players can change their vote freely until the result is revealed.
+ */
+export default function VotingPanel({
+  room, players, hands, me, roundNumber, isAdmin, onReveal,
+  onChat, unreadCount,
+}) {
   const [votes, setVotes] = useState([])
   const [myVote, setMyVote] = useState(null)
   const [busy, setBusy] = useState(false)
@@ -23,6 +36,7 @@ export default function VotingPanel({ room, players, hands, me, roundNumber, isA
     return () => clearInterval(id)
   }, [room?.voting_started_at, room?.settings?.votingTime, isAdmin])
 
+  // Live votes — listen to INSERT and DELETE (since revoting deletes the old row)
   useEffect(() => {
     if (!room?.id) return
     let cancelled = false
@@ -32,115 +46,160 @@ export default function VotingPanel({ room, players, hands, me, roundNumber, isA
       if (!cancelled) {
         setVotes(data || [])
         const mine = data?.find((v) => v.voter_player_id === me?.id)
-        if (mine) setMyVote(mine.target_player_id)
+        setMyVote(mine ? mine.target_player_id : null)
       }
     }
     load()
     const ch = supabase
       .channel(`votes:${room.id}:${roundNumber}`)
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'votes',
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'votes',
         filter: `room_id=eq.${room.id}` }, load)
       .subscribe()
     return () => { cancelled = true; supabase.removeChannel(ch) }
   }, [room?.id, roundNumber, me?.id])
 
+  // Vote / re-vote: UPDATE existing row if I already voted, INSERT otherwise.
+  // (Update is preferred over DELETE+INSERT because most setups only have an
+  //  insert-or-update RLS policy on the votes table, not a DELETE one.)
   async function vote(targetId) {
-    if (myVote || busy || !me) return
+    if (busy || !me || myVote === targetId) return
     setBusy(true)
     setError('')
     try {
-      await supabase.from('votes').insert({
-        room_id: room.id, round_number: roundNumber,
-        voter_player_id: me.id, target_player_id: targetId,
-      })
+      if (myVote) {
+        const { error: upErr } = await supabase.from('votes')
+          .update({ target_player_id: targetId })
+          .eq('room_id', room.id).eq('round_number', roundNumber).eq('voter_player_id', me.id)
+        if (upErr) throw upErr
+      } else {
+        const { error: insErr } = await supabase.from('votes').insert({
+          room_id: room.id, round_number: roundNumber,
+          voter_player_id: me.id, target_player_id: targetId,
+        })
+        if (insErr) throw insErr
+      }
       setMyVote(targetId)
     } catch (e) { setError(e.message) }
     finally { setBusy(false) }
   }
 
-  // Players who had a hand this round (played) — shown in list for voting
-  const playedPlayerIds = new Set((hands || []).map(h => h.player_id))
-  const playedPlayers = players.filter(p => playedPlayerIds.has(p.id))
-
-  // Did the current user play in this round? If not, they can only watch the vote
+  const playedPlayerIds = new Set((hands || []).map((h) => h.player_id))
+  const playedPlayers = players.filter((p) => playedPlayerIds.has(p.id))
   const iCanVote = playedPlayerIds.has(me?.id)
+  const activePlayers = playedPlayers.filter((p) => !p.left_game)
+  const votedCount = votes.filter((v) => activePlayers.some((p) => p.id === v.voter_player_id)).length
+  const everyoneVoted = activePlayers.length > 0 && votedCount >= activePlayers.length
 
-  // Only non-left players need to vote
-  const activePlayers = playedPlayers.filter(p => !p.left_game)
-  const everyoneVoted = activePlayers.length > 0 && votes.filter(v =>
-    activePlayers.some(p => p.id === v.voter_player_id)
-  ).length >= activePlayers.length
   const urgent = secondsLeft !== null && secondsLeft <= 10
   const mins = Math.floor((secondsLeft ?? 0) / 60)
   const secs = ((secondsLeft ?? 0) % 60).toString().padStart(2, '0')
 
+  // Single-line status text used in the footer
+  const statusText = myVote
+    ? `הצבעת על ${players.find((p) => p.id === myVote)?.name} · ${votedCount}/${activePlayers.length}`
+    : iCanVote
+      ? `בחר על מי להצביע · ${votedCount}/${activePlayers.length}`
+      : 'צופה בלבד'
+
   return (
-    <div className="bg-yellow-950/80 border-2 border-yellow-500 rounded-xl p-4 mb-4 space-y-3">
-      <div className="flex justify-between items-center">
-        <div className="text-yellow-200 font-bold text-lg">🗳️ שלב ההצבעה</div>
+    <div className="bg-yellow-950/80 border-2 border-yellow-500 rounded-xl p-2 space-y-1.5">
+      {/* Header */}
+      <div className="flex justify-between items-center" style={{ minHeight: '24px' }}>
+        <span className="text-yellow-200 font-bold text-sm">🗳️ שלב ההצבעה</span>
         {secondsLeft !== null && (
-          <div className={`font-mono text-2xl font-bold ${urgent ? 'text-red-400 animate-pulse' : 'text-yellow-200'}`}>
+          <span className={`font-mono text-base font-bold ${urgent ? 'text-red-400 animate-pulse' : 'text-yellow-200'}`}>
             {mins}:{secs}
-          </div>
+          </span>
         )}
       </div>
-      <div className="text-yellow-100/70 text-sm">הצבעה גלויה — כולם רואים מי מצביע על מי.</div>
 
-      <div className="space-y-2">
+      {/* Player tiles — fixed-height rows; voters list on the side, truncated */}
+      <div className="space-y-1">
         {playedPlayers.map((p) => {
           const isMe = p.id === me?.id
-          const votesForP = votes.filter((v) => v.target_player_id === p.id)
-          const voterNames = votesForP.map((v) => playedPlayers.find((x) => x.id === v.voter_player_id)?.name || '?')
-          const iMyTarget = myVote === p.id
-          const canVote = !isMe && !myVote && !p.left_game && iCanVote
+          const isMyTarget = myVote === p.id
+          const voters = votes
+            .filter((v) => v.target_player_id === p.id)
+            .map((v) => playedPlayers.find((x) => x.id === v.voter_player_id)?.name || '?')
+          const canVote = !isMe && !p.left_game && iCanVote
           return (
-            <div key={p.id}
-              className={`flex items-center justify-between p-3 rounded-lg border
-                ${iMyTarget ? 'border-yellow-400 bg-yellow-500/20' : 'border-yellow-800 bg-yellow-950/40'}
-                ${isMe ? 'opacity-60' : ''}`}>
-              <div>
-                <div className="text-yellow-50 font-bold flex items-center gap-1.5">
-                  {p.name}
-                  {isMe && <span className="text-yellow-300/60 text-xs">(אני)</span>}
-                  {p.left_game && <span className="text-white/30 text-xs">יצא</span>}
-                </div>
-                {voterNames.length > 0 && (
-                  <div className="text-yellow-300/70 text-xs">הצביעו: {voterNames.join(', ')}</div>
-                )}
+            <div
+              key={p.id}
+              className="flex items-center gap-2 px-2 rounded-md"
+              style={{
+                background: isMyTarget ? 'rgba(234,179,8,0.18)' : 'rgba(60,40,5,0.35)',
+                border: isMyTarget ? '1.5px solid #eab308' : '1px solid rgba(234,179,8,0.25)',
+                opacity: p.left_game ? 0.5 : 1,
+                minHeight: '32px',
+              }}
+            >
+              {/* Name column — FIXED width so the voters list starts at the same x across rows */}
+              <div className="flex items-center gap-1 text-sm font-bold text-yellow-50 whitespace-nowrap overflow-hidden"
+                style={{ width: '110px', flexShrink: 0 }}>
+                <span className="truncate">{p.name}</span>
+                {isMe && <span className="text-yellow-300/60 text-[10px]">(אני)</span>}
+                {p.left_game && <span className="text-white/40 text-[10px]">יצא</span>}
               </div>
-              {canVote && (
-                <button onClick={() => vote(p.id)} disabled={busy}
-                  className="px-4 py-2 rounded-lg bg-yellow-500 hover:bg-yellow-400 text-yellow-950 font-bold text-sm disabled:opacity-50">
-                  הצבע
+
+              {/* Voters list (with count badge on the left of the names) */}
+              <div className="flex-1 min-w-0 flex items-center gap-1.5 text-yellow-300/70 text-[11px]">
+                {voters.length > 0 && (
+                  <span className="text-[10px] bg-yellow-500/30 text-yellow-100 rounded-full px-1.5 font-bold" style={{ flexShrink: 0 }}>
+                    {voters.length}
+                  </span>
+                )}
+                <span className="truncate">
+                  {voters.length > 0 ? `הצביעו: ${voters.join(', ')}` : ''}
+                </span>
+              </div>
+
+              {/* Vote button — same width regardless of state to keep layout stable */}
+              {canVote ? (
+                <button
+                  onClick={() => vote(p.id)}
+                  disabled={busy}
+                  className="rounded-md font-bold text-xs disabled:opacity-50 active:scale-95"
+                  style={{
+                    background: isMyTarget ? '#fde047' : '#eab308',
+                    color: '#3b2400',
+                    width: '64px',
+                    height: '24px',
+                    flexShrink: 0,
+                  }}
+                >
+                  {isMyTarget ? '✓ נבחר' : 'הצבע'}
                 </button>
+              ) : (
+                <div style={{ width: '64px', flexShrink: 0 }} />
               )}
-              {iMyTarget && <span className="text-yellow-300 font-bold text-sm">✓ בחרתי</span>}
             </div>
           )
         })}
       </div>
 
-      {myVote && (
-        <div className="text-yellow-200/70 text-sm text-center">
-          הצבעת על {players.find((p) => p.id === myVote)?.name}. ממתין לשאר...
-          ({votes.filter(v => activePlayers.some(p => p.id === v.voter_player_id)).length}/{activePlayers.length})
-        </div>
-      )}
+      {/* Footer — single line: status · reveal (admin) · chat */}
+      <div className="flex items-center gap-2" style={{ minHeight: '28px' }}>
+        <span className="text-yellow-200/70 text-[11px] flex-1 truncate">{statusText}</span>
+        {isAdmin && (
+          <button
+            onClick={onReveal}
+            disabled={!everyoneVoted && (secondsLeft ?? 1) > 0}
+            className="rounded-md font-bold text-[11px] uppercase tracking-wide disabled:opacity-40 active:scale-95"
+            style={{
+              background: everyoneVoted ? '#eab308' : 'rgba(234,179,8,0.2)',
+              color: everyoneVoted ? '#3b2400' : 'rgba(234,179,8,0.6)',
+              border: '1px solid #eab308',
+              padding: '4px 10px',
+              height: '26px',
+            }}
+          >
+            חשוף
+          </button>
+        )}
+        {onChat && <ChatButton onChat={onChat} unreadCount={unreadCount} />}
+      </div>
 
-      {isAdmin && everyoneVoted && (
-        <button onClick={onReveal}
-          className="w-full py-3 rounded-lg bg-yellow-500 hover:bg-yellow-400 text-yellow-950 font-bold">
-          חשוף תוצאה
-        </button>
-      )}
-
-      {!iCanVote && (
-        <div className="text-center text-white/30 text-xs py-1">
-          לא שיחקת בסיבוב זה — צופה בלבד
-        </div>
-      )}
-
-      {error && <div className="text-red-300 text-xs">{error}</div>}
+      {error && <div className="text-red-300 text-[10px]">{error}</div>}
     </div>
   )
 }

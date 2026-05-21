@@ -1,116 +1,139 @@
 import { useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase.js'
 
+/**
+ * Reveal/result panel — shown after the vote concludes. Visual layout matches
+ * the VotingPanel so the player perceives the screen "completing" rather than
+ * resizing. Outcome (caught / wrong / tie / traitor-left) is signaled by the
+ * header text and the optional reveal banner; tile rows and the footer
+ * (status + admin "next round") preserve VotingPanel's structure.
+ */
 export default function ResultPanel({ room, players, roundNumber, isAdmin, onNextRound }) {
   const [votes, setVotes] = useState([])
 
   useEffect(() => {
     if (!room?.id) return
-    supabase.from('votes').select('*').eq('room_id', room.id).eq('round_number', roundNumber)
-      .then(({ data }) => setVotes(data || []))
-    // subscribe to votes in case they arrive slightly late
+    let cancelled = false
+    async function load() {
+      const { data } = await supabase.from('votes').select('*')
+        .eq('room_id', room.id).eq('round_number', roundNumber)
+      if (!cancelled) setVotes(data || [])
+    }
+    load()
     const ch = supabase
       .channel(`result-votes:${room.id}:${roundNumber}`)
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'votes', filter: `room_id=eq.${room.id}` },
-        () => supabase.from('votes').select('*').eq('room_id', room.id).eq('round_number', roundNumber)
-               .then(({ data }) => setVotes(data || [])))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'votes', filter: `room_id=eq.${room.id}` }, load)
       .subscribe()
-    return () => supabase.removeChannel(ch)
+    return () => { cancelled = true; supabase.removeChannel(ch) }
   }, [room?.id, roundNumber])
 
-  // Traitor left mid-game
-  if (room.traitor_left) {
-    return (
-      <div className="border-2 rounded-xl p-4 mb-4 space-y-3 text-center"
-        style={{ background: 'rgba(180,60,0,0.2)', borderColor: 'rgba(255,120,0,0.5)' }}>
-        <div className="text-orange-300 font-bold text-lg">🚪 הבוגד עזב את המשחק</div>
-        <div className="text-white/50 text-sm">בוגד חדש ייבחר בסיבוב הבא</div>
+  // ── Tally + outcome derivation ──
+  const tally = {}
+  for (const v of votes) tally[v.target_player_id] = (tally[v.target_player_id] || 0) + 1
+  const counts = Object.values(tally)
+  const maxVotes = counts.length ? Math.max(...counts) : 0
+  const topTargets = Object.keys(tally).filter((id) => tally[id] === maxVotes)
+  const isTie = topTargets.length > 1
+  const traitorLeft = !!room.traitor_left
+  const revealedTraitorId = room.revealed_traitor_player_id
+  const traitorPlayer = revealedTraitorId ? players.find((p) => p.id === revealedTraitorId) : null
+  const traitorCaught = !!revealedTraitorId && !traitorLeft
+
+  // Outcome metadata drives the small status banner (and tile of the caught
+  // traitor, when known). Keep all colors in the yellow family for parity with
+  // VotingPanel; outcome state is conveyed via the icon/text + a single accent.
+  const outcome = traitorLeft
+    ? { icon: '🚪', text: 'הבוגד עזב — בוגד חדש בסיבוב הבא', accent: '#fb923c' }
+    : isTie
+      ? { icon: '🤝', text: 'תיקו — הבוגד שורד', accent: '#fbbf24' }
+      : traitorCaught
+        ? { icon: '✅', text: `הבוגד נתפס: ${traitorPlayer?.name ?? '?'}`, accent: '#22c55e' }
+        : { icon: '❌', text: 'הואשם תמים — הבוגד שורד', accent: '#ef4444' }
+
+  // Players that received any votes — shown in the compact tile list. Order by
+  // count desc so the leading suspects are first.
+  const tilePlayers = players
+    .filter((p) => (tally[p.id] || 0) > 0)
+    .sort((a, b) => (tally[b.id] || 0) - (tally[a.id] || 0))
+
+  return (
+    <div className="bg-yellow-950/80 border-2 border-yellow-500 rounded-xl p-2 space-y-1.5">
+      {/* Header — outcome banner replaces the voting-phase timer */}
+      <div
+        className="flex items-center gap-2 rounded-md px-2 py-1"
+        style={{
+          background: 'rgba(60,40,5,0.6)',
+          border: `1px solid ${outcome.accent}`,
+          minHeight: '28px',
+        }}
+      >
+        <span className="text-base">{outcome.icon}</span>
+        <span className="font-bold text-sm" style={{ color: outcome.accent }}>
+          {outcome.text}
+        </span>
+      </div>
+
+      {/* Player tiles — same layout as voting (fixed-width name col, voters on the side) */}
+      {tilePlayers.length > 0 && (
+        <div className="space-y-1">
+          {tilePlayers.map((p) => {
+            const count = tally[p.id] || 0
+            const voterNames = votes
+              .filter((v) => v.target_player_id === p.id)
+              .map((v) => players.find((x) => x.id === v.voter_player_id)?.name || '?')
+            const isCaughtRow = traitorCaught && p.id === revealedTraitorId
+            return (
+              <div
+                key={p.id}
+                className="flex items-center gap-2 px-2 rounded-md"
+                style={{
+                  background: isCaughtRow ? 'rgba(34,197,94,0.18)' : 'rgba(60,40,5,0.35)',
+                  border: isCaughtRow ? '1.5px solid #22c55e' : '1px solid rgba(234,179,8,0.25)',
+                  minHeight: '32px',
+                }}
+              >
+                {/* Name column — fixed width to keep voters column aligned */}
+                <div className="flex items-center gap-1 text-sm font-bold text-yellow-50 whitespace-nowrap overflow-hidden"
+                  style={{ width: '110px', flexShrink: 0 }}>
+                  <span className="truncate">{p.name}</span>
+                  {isCaughtRow && <span className="text-[10px] text-green-300">🕵️</span>}
+                </div>
+
+                {/* Voters list with count badge (mirrors VotingPanel) */}
+                <div className="flex-1 min-w-0 flex items-center gap-1.5 text-yellow-300/70 text-[11px]">
+                  <span className="text-[10px] bg-yellow-500/30 text-yellow-100 rounded-full px-1.5 font-bold"
+                    style={{ flexShrink: 0 }}>
+                    {count}
+                  </span>
+                  <span className="truncate">הצביעו: {voterNames.join(', ')}</span>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      )}
+
+      {/* Footer — single line: round-state hint + admin Next Round */}
+      <div className="flex items-center gap-2" style={{ minHeight: '28px' }}>
+        <span className="text-yellow-200/70 text-[11px] flex-1 truncate">
+          {isAdmin ? 'לחץ "סיבוב הבא" כשתהיו מוכנים' : 'ממתין שהאדמין יתחיל סיבוב חדש'}
+        </span>
         {isAdmin && (
-          <button onClick={onNextRound}
-            className="w-full py-3 rounded-lg bg-amber-500 hover:bg-amber-400 text-emerald-950 font-bold">
+          <button
+            onClick={onNextRound}
+            className="rounded-md font-bold text-[11px] uppercase tracking-wide active:scale-95"
+            style={{
+              background: '#eab308',
+              color: '#3b2400',
+              border: '1px solid #eab308',
+              padding: '4px 12px',
+              height: '26px',
+            }}
+          >
             סיבוב הבא
           </button>
         )}
       </div>
-    )
-  }
-
-  if (!votes.length && !room.traitor_left) return (
-    <div className="text-center text-white/60 text-sm mt-4">טוען תוצאות...</div>
-  )
-
-  // Count votes per target
-  const tally = {}
-  for (const v of votes) {
-    tally[v.target_player_id] = (tally[v.target_player_id] || 0) + 1
-  }
-  const maxVotes = Math.max(...Object.values(tally))
-  const topTargets = Object.keys(tally).filter((id) => tally[id] === maxVotes)
-  const isTie = topTargets.length > 1
-  const accusedId = isTie ? null : topTargets[0]
-  const accusedPlayer = players.find((p) => p.id === accusedId)
-
-  const traitorLeft = !!room.traitor_left
-
-  // The revealed_traitor_player_id is set by the RPC only if caught (and traitor didn't leave)
-  const revealedTraitorId = room.revealed_traitor_player_id
-  const traitorPlayer = revealedTraitorId ? players.find((p) => p.id === revealedTraitorId) : null
-  const traitorCaught = !!revealedTraitorId && !traitorLeft
-  const innocentAccused = !isTie && !traitorCaught && !traitorLeft
-
-  // Title logic
-  const titleText = traitorLeft
-    ? (isTie ? '🤝 תיקו — הבוגד יצא, נבחר בוגד חדש' : `❌ טעות — הבוגד יצא, נבחר בוגד חדש`)
-    : isTie ? '🤝 תיקו — הבוגד שורד!'
-    : traitorCaught ? '✅ הבוגד נתפס!'
-    : '❌ הואשם תמים — הבוגד שורד!'
-
-  return (
-    <div className={`border-2 rounded-xl p-4 mb-4 space-y-4 ${
-      traitorCaught ? 'bg-green-950/80 border-green-500'
-      : traitorLeft ? 'bg-orange-950/80 border-orange-500'
-      : 'bg-red-950/80 border-red-500'}`}>
-      <div className={`font-bold text-xl text-center ${
-        traitorCaught ? 'text-green-200'
-        : traitorLeft ? 'text-orange-200'
-        : 'text-red-200'}`}>
-        {titleText}
-      </div>
-
-      {/* Vote summary */}
-      <div className="space-y-2">
-        <div className="text-white/70 text-sm font-bold">תוצאות ההצבעה:</div>
-        {players.map((p) => {
-          const count = tally[p.id] || 0
-          const voterNames = votes.filter((v) => v.target_player_id === p.id)
-            .map((v) => players.find((x) => x.id === v.voter_player_id)?.name || '?')
-          if (count === 0) return null
-          return (
-            <div key={p.id} className="flex items-center justify-between bg-white/10 px-3 py-2 rounded-lg">
-              <div>
-                <span className="text-white font-bold">{p.name}</span>
-                <span className="text-white/60 text-xs mr-2">← {voterNames.join(', ')}</span>
-              </div>
-              <span className="text-amber-300 font-bold">{count} קולות</span>
-            </div>
-          )
-        })}
-      </div>
-
-      {/* Traitor reveal */}
-      {traitorCaught && traitorPlayer && (
-        <div className="bg-red-900/60 border border-red-400 rounded-lg p-3 text-center">
-          <div className="text-red-200 text-sm">הבוגד היה:</div>
-          <div className="text-red-100 font-bold text-xl">{traitorPlayer.name}</div>
-        </div>
-      )}
-
-      {isAdmin && (
-        <button onClick={onNextRound}
-          className="w-full py-3 rounded-lg bg-amber-500 hover:bg-amber-400 text-emerald-950 font-bold">
-          סיבוב הבא
-        </button>
-      )}
     </div>
   )
 }

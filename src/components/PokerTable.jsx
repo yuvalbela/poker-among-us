@@ -276,7 +276,11 @@ export default function PokerTable({
     return hand?.seat_index ?? -1
   }
 
-  const showdownRevealed = phase === 'showdown' || phase === 'finished'
+  // Reveal opponents' cards only at an ACTUAL showdown (two or more contestants
+  // reached the river). If the round ended because everyone else folded, the
+  // last player isn't required to show — they may have been bluffing.
+  const showdownRevealed = (phase === 'showdown' || phase === 'finished')
+    && round?.win_reason !== 'fold'
 
   return (
     <div className="relative w-full h-full">

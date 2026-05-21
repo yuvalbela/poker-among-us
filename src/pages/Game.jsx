@@ -551,7 +551,13 @@ export default function Game() {
 
         {/* Traitor slot — single-line inline panel reserves 22px */}
         <div style={{ minHeight: '22px' }}>
-          <TraitorPanel traitor={traitor} />
+          <TraitorPanel
+            traitor={traitor}
+            roundOver={
+              round.phase === 'showdown' || round.phase === 'finished' ||
+              room.game_phase === 'voting' || room.game_phase === 'result'
+            }
+          />
         </div>
 
         {/* Action panel */}
@@ -637,6 +643,8 @@ export default function Game() {
             room={room} players={players} hands={hands} me={me}
             roundNumber={round.round_number} isAdmin={isAdmin}
             onReveal={revealResult}
+            onChat={() => setChatOpen((o) => !o)}
+            unreadCount={unreadCount}
           />
         )}
 

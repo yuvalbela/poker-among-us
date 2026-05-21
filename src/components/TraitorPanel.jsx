@@ -1,5 +1,6 @@
 // Per-level instruction the player sees in the status bar.
-function instructionFor(level, used) {
+function instructionFor(level, used, roundOver) {
+  if (roundOver) return 'הסיבוב נגמר — היכולת תחזור בסיבוב הבא'
   if (level === 1) return used ? 'השתמשת ביכולת הסיבוב' : 'לחץ על "הצץ אקראי" כדי להציץ בקלף אקראי'
   if (level === 2) return used ? 'השתמשת ביכולת הסיבוב' : 'לחץ על קלף של שחקן אחר כדי להציץ בו'
   if (level === 3) return used ? 'השתמשת ביכולת הסיבוב' : 'לחץ על שחקן אחר כדי לראות את היד שלו'
@@ -7,7 +8,7 @@ function instructionFor(level, used) {
   return ''
 }
 
-export default function TraitorPanel({ traitor }) {
+export default function TraitorPanel({ traitor, roundOver = false }) {
   if (!traitor?.isTraitor) return null
 
   const { effectiveLevel: lvl, usedPeek, usedView, usedSwap, busy, error,
@@ -17,32 +18,37 @@ export default function TraitorPanel({ traitor }) {
             : lvl === 3 ? usedView
             : lvl === 4 ? (usedView && usedSwap) : false
 
+  // Level-1 button: disabled when ability already used, busy, OR round is over.
+  const peekDisabled = busy || usedPeek || roundOver
+
   return (
     <div style={{ borderTop: '1px solid rgba(255,100,100,0.2)', paddingTop: '4px' }}>
       <div className="flex items-center gap-2">
         <span className="text-[11px] font-bold whitespace-nowrap" style={{ color: '#ef4444' }}>🕵️ רמה {lvl}</span>
-        <span className="text-[10px] text-white/40 truncate">{instructionFor(lvl, used)}</span>
-        {/* Level 1 — inline compact button */}
+        <span className="text-[10px] text-white/40 truncate flex-1">{instructionFor(lvl, used, roundOver)}</span>
+        {/* Level 1 — inline compact button (always rendered at the end so it doesn't jump) */}
         {lvl === 1 && (
           <button
-            disabled={busy || usedPeek}
+            disabled={peekDisabled}
             onClick={peekRandom}
-            className="px-2 py-1 rounded text-[11px] font-bold mr-auto whitespace-nowrap"
+            className="px-2 py-1 rounded text-[11px] font-bold whitespace-nowrap"
             style={{
-              background: usedPeek ? '#3a1515' : '#7f1d1d',
-              color: usedPeek ? '#666' : 'white',
+              background: peekDisabled ? '#3a1515' : '#7f1d1d',
+              color: peekDisabled ? '#666' : 'white',
               border: '1px solid #ef4444',
               flexShrink: 0,
+              opacity: peekDisabled ? 0.6 : 1,
+              cursor: peekDisabled ? 'default' : 'pointer',
             }}
           >
             {usedPeek ? '✓ הצצת' : '👁 הצץ אקראי'}
           </button>
         )}
-        {error && <span className="text-[9px] text-red-400 mr-auto">{error}</span>}
       </div>
-
-      {/* No persistent history row — revealed cards display via the flip animation
-          on the table (duration controlled by settings.revealDurationSeconds). */}
+      {/* Error row — sits below to avoid pushing the action button around */}
+      {error && !roundOver && (
+        <div className="text-[9px] text-red-400 mt-0.5">{error}</div>
+      )}
     </div>
   )
 }
