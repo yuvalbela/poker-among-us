@@ -77,6 +77,7 @@ export default function PokerTable({
   round,
   me,
   lastMessages, // { playerId: string }
+  traitor,       // from useTraitor() — controls clickable cards/seats when I'm the traitor
 }) {
   const isLandscape = useOrientation()
 
@@ -246,6 +247,30 @@ export default function PokerTable({
           && hand.status === 'active' && phase !== 'showdown' && phase !== 'finished'
         const allCards = showdownRevealed ? (holeCards[hand?.id] ?? null) : null
 
+        // --- Traitor click wiring ---
+        // Decide for THIS seat whether cards or the seat should be clickable for
+        // the local traitor user, based on level + already-used flags + target validity.
+        let onCardClick, onSeatClick, cardsHighlight = false, seatHighlight = false
+        const targetValid = hand && hand.status !== 'folded' && !player.left_game
+        if (traitor?.isTraitor && phase !== 'showdown' && phase !== 'finished') {
+          const lvl = traitor.effectiveLevel
+          if (isMe) {
+            // Level 4: tap own card to swap it
+            if (lvl === 4 && !traitor.usedSwap && hand?.status === 'active') {
+              onCardClick = (i) => traitor.swapCard(i)
+              cardsHighlight = true
+            }
+          } else if (targetValid) {
+            if (lvl === 2 && !traitor.usedPeek) {
+              onCardClick = (i) => traitor.peekCard(player.id, i)
+              cardsHighlight = true
+            } else if ((lvl === 3 || lvl === 4) && !traitor.usedView) {
+              onSeatClick = () => traitor.viewHand(player.id)
+              seatHighlight = true
+            }
+          }
+        }
+
         return (
           <div
             key={player.id}
@@ -264,6 +289,10 @@ export default function PokerTable({
               isBB={seatIdx === bbIdx}
               chatMessage={lastMessages?.[player.id]}
               small={!isLandscape}
+              onCardClick={onCardClick}
+              onSeatClick={onSeatClick}
+              cardsHighlight={cardsHighlight}
+              seatHighlight={seatHighlight}
             />
           </div>
         )

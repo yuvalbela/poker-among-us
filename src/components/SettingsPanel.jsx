@@ -17,6 +17,7 @@ const DEFAULTS = {
   playerTimerSeconds: 0,
   traitorLoseOnCaught: false,
   traitorPenaltyAmount: 200,
+  revealDurationSeconds: 5,   // how long a card revealed by traitor stays face-up. Special value 'round' = until end of round.
 }
 
 // Slider with manual number input (allows values outside range)
@@ -154,6 +155,25 @@ export default function SettingsPanel({ room, onClose }) {
           {s.traitorLoseOnCaught && (
             <Slider label="קנס לבוגד שנתפס" value={s.traitorPenaltyAmount} min={50} max={500} step={50} onChange={(v) => set('traitorPenaltyAmount', v)} />
           )}
+
+          {/* Reveal duration */}
+          <div className="flex items-center justify-between py-1">
+            <div>
+              <div className="text-emerald-50 text-sm font-bold">משך הצגת קלף שהוצץ</div>
+              <div className="text-emerald-100/50 text-xs">כמה זמן קלף שהבוגד גילה נשאר פתוח לעיניו</div>
+            </div>
+            <select
+              value={s.revealDurationSeconds ?? 5}
+              onChange={(e) => set('revealDurationSeconds', e.target.value === 'round' ? 'round' : Number(e.target.value))}
+              className="text-xs rounded px-2 py-1 font-bold"
+              style={{ background: '#1a2a1a', color: '#fbbf24', border: '1px solid rgba(255,255,255,0.15)' }}
+            >
+              <option value={3}>3 שניות</option>
+              <option value={5}>5 שניות</option>
+              <option value={10}>10 שניות</option>
+              <option value={'round'}>כל הסיבוב</option>
+            </select>
+          </div>
 
           {/* Traitor abilities */}
           <div className="border-t border-emerald-800 pt-3 text-emerald-100/60 text-xs font-bold uppercase tracking-wider">

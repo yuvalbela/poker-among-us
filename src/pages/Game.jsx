@@ -5,6 +5,7 @@ import { useAuth } from '../lib/auth.js'
 import { takeAction, startNewRound } from '../lib/gameFlow.js'
 import { bestHandFor, HAND_CATEGORIES } from '../lib/pokerLogic.js'
 import TraitorPanel from '../components/TraitorPanel.jsx'
+import { useTraitor } from '../lib/useTraitor.js'
 import VotingPanel from '../components/VotingPanel.jsx'
 import ResultPanel from '../components/ResultPanel.jsx'
 import PokerTable from '../components/PokerTable.jsx'
@@ -186,6 +187,42 @@ export default function Game() {
   const me = players.find((p) => p.user_id === userId)
   const myHand = hands.find((h) => h.player_id === me?.id)
   const isAdmin = room?.admin_user_id === userId
+
+  // --- Traitor reveal handler — must be defined before useTraitor so it can be passed in ---
+  const traitorOnReveal = (targetPlayerId, cardIndex, card) => {
+    setRevealedByTraitor((prev) => ({
+      ...prev,
+      [targetPlayerId]: { ...(prev[targetPlayerId] || {}), [cardIndex]: card },
+    }))
+    const dur = room?.settings?.revealDurationSeconds ?? 5
+    if (dur === 'round') return
+    const ms = Math.max(1, Number(dur)) * 1000
+    setTimeout(() => setRevealedByTraitor((prev) => {
+      const next = { ...prev }
+      if (next[targetPlayerId]) {
+        const remaining = { ...next[targetPlayerId] }
+        delete remaining[cardIndex]
+        if (Object.keys(remaining).length === 0) delete next[targetPlayerId]
+        else next[targetPlayerId] = remaining
+      }
+      return next
+    }), ms)
+  }
+
+  // Centralized traitor state + ability handlers (shared by TraitorPanel + PokerTable).
+  // MUST be called unconditionally before any early returns to respect React's rules of hooks.
+  const traitor = useTraitor({
+    roomId: room?.id,
+    roundId: round?.id,
+    settings: room?.settings || {},
+    myPlayerId: me?.id,
+    onReveal: traitorOnReveal,
+  })
+
+  // Clear traitor card reveals at end of round (so they don't leak into next round)
+  useEffect(() => {
+    if (round?.phase === 'finished') setRevealedByTraitor({})
+  }, [round?.phase, round?.id])
 
   // Persistent chat
   useEffect(() => {
@@ -452,22 +489,6 @@ export default function Game() {
   const maxRaise = myHand ? myHand.current_bet + chipsLeft : 0
   const showdownRevealed = round.phase === 'showdown' || round.phase === 'finished'
 
-  const traitorOnReveal = (targetPlayerId, cardIndex, card) => {
-    setRevealedByTraitor((prev) => ({
-      ...prev,
-      [targetPlayerId]: { ...(prev[targetPlayerId] || {}), [cardIndex]: card },
-    }))
-    setTimeout(() => setRevealedByTraitor((prev) => {
-      const next = { ...prev }
-      if (next[targetPlayerId]) {
-        const remaining = { ...next[targetPlayerId] }
-        delete remaining[cardIndex]
-        if (Object.keys(remaining).length === 0) delete next[targetPlayerId]
-        else next[targetPlayerId] = remaining
-      }
-      return next
-    }), 8000)
-  }
 
   return (
     <div style={{ height: '100dvh', display: 'flex', flexDirection: 'column', background: '#111118', overflow: 'hidden' }}>
@@ -493,6 +514,7 @@ export default function Game() {
           round={round}
           me={me}
           lastMessages={lastMessages}
+          traitor={traitor}
         />
         </div>
       </div>
@@ -524,17 +546,7 @@ export default function Game() {
         )}
 
         {/* Traitor abilities — above action buttons */}
-        <TraitorPanel
-          roomId={room.id}
-          roundId={round.id}
-          players={players}
-          hands={hands}
-          myPlayerId={me.id}
-          holeCards={myHand && holeCards[myHand.id]}
-          onReveal={traitorOnReveal}
-          settings={room.settings || {}}
-          inline
-        />
+        <TraitorPanel traitor={traitor} players={players} />
 
         {/* Action panel */}
         {isMyTurn && (

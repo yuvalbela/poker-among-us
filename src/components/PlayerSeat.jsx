@@ -42,12 +42,20 @@ export default function PlayerSeat({
   player, hand, cards, revealedCards,
   isMe, isCurrent, isDealer, isSB, isBB,
   chatMessage,
+  // Traitor click handlers — when provided, cards/seat become clickable + highlighted.
+  onCardClick,   // (cardIndex) => void   — fires on tapping a single card
+  onSeatClick,   // () => void            — fires on tapping the seat (view-hand)
+  cardsHighlight = false,
+  seatHighlight = false,
 }) {
   const folded = hand?.status === 'folded'
   const allIn = hand?.status === 'all_in'
   const bet = hand?.current_bet ?? 0
 
   const seatBg = isCurrent ? 'rgba(180,130,0,0.35)' : folded ? 'rgba(20,20,20,0.7)' : 'rgba(25,25,35,0.88)'
+
+  // Pulsing red glow used for traitor-clickable elements
+  const glow = '0 0 0 2px #ef4444, 0 0 12px rgba(239,68,68,0.7)'
 
   return (
     <div className={`flex flex-col items-center select-none ${folded ? 'opacity-45' : ''}`}
@@ -69,6 +77,7 @@ export default function PlayerSeat({
             const angle = i === 0 ? -18 : 8
             const offsetX = i === 0 ? 0 : 24
             const offsetY = i === 0 ? 6 : 5
+            const clickable = !!onCardClick && cardsHighlight
             return (
               <div key={i} style={{
                 position: 'absolute',
@@ -77,7 +86,12 @@ export default function PlayerSeat({
                 transform: `rotate(${angle}deg)`,
                 zIndex: i,
                 filter: 'drop-shadow(2px 3px 5px rgba(0,0,0,0.6))',
-              }}>
+                cursor: clickable ? 'pointer' : undefined,
+                boxShadow: clickable ? glow : undefined,
+                borderRadius: clickable ? '6px' : undefined,
+                animation: clickable ? 'traitor-pulse 1.5s ease-in-out infinite' : undefined,
+              }}
+              onClick={clickable ? (e) => { e.stopPropagation(); onCardClick(i) } : undefined}>
                 <CardFace card={c} />
               </div>
             )
@@ -91,6 +105,7 @@ export default function PlayerSeat({
             const angle = i === 0 ? -18 : 8
             const offsetX = i === 0 ? 0 : 24
             const offsetY = i === 0 ? 6 : 5
+            const clickable = !!onCardClick && cardsHighlight
             return (
               <div
                 key={i}
@@ -101,7 +116,12 @@ export default function PlayerSeat({
                   transform: `rotate(${angle}deg)`,
                   zIndex: i,
                   filter: 'drop-shadow(2px 3px 4px rgba(0,0,0,0.55))',
+                  cursor: clickable ? 'pointer' : undefined,
+                  boxShadow: clickable ? glow : undefined,
+                  borderRadius: clickable ? '6px' : undefined,
+                  animation: clickable ? 'traitor-pulse 1.5s ease-in-out infinite' : undefined,
                 }}
+                onClick={clickable ? (e) => { e.stopPropagation(); onCardClick(i) } : undefined}
               >
                 {revealed
                   ? <CardFace card={revealed} flipping />
@@ -114,11 +134,19 @@ export default function PlayerSeat({
       )}
 
       {/* Seat box — name + chips */}
-      <div className="rounded-lg overflow-hidden text-center w-full"
+      <div
+        className="rounded-lg overflow-hidden text-center w-full"
+        onClick={onSeatClick && seatHighlight ? (e) => { e.stopPropagation(); onSeatClick() } : undefined}
         style={{
           background: seatBg,
-          border: isCurrent ? '1px solid rgba(200,150,0,0.7)' : '1px solid rgba(255,255,255,0.1)',
-          boxShadow: isCurrent ? '0 0 8px rgba(200,150,0,0.4)' : 'none',
+          border: (onSeatClick && seatHighlight) ? '1px solid #ef4444'
+                : isCurrent ? '1px solid rgba(200,150,0,0.7)'
+                : '1px solid rgba(255,255,255,0.1)',
+          boxShadow: (onSeatClick && seatHighlight) ? glow
+                  : isCurrent ? '0 0 8px rgba(200,150,0,0.4)'
+                  : 'none',
+          cursor: (onSeatClick && seatHighlight) ? 'pointer' : undefined,
+          animation: (onSeatClick && seatHighlight) ? 'traitor-pulse 1.5s ease-in-out infinite' : undefined,
         }}>
         <div className="px-2 py-0.5 text-[11px] font-semibold text-white/90 truncate flex items-center justify-center gap-1">
           {isDealer && <span className="text-[9px] bg-white/20 px-1 rounded">D</span>}
