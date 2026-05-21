@@ -101,7 +101,10 @@ export default function PlayerSeat({
         // Opponents: fanned with angle and overlap
         <div className="relative" style={{ width: '80px', height: '88px' }}>
           {[0, 1].map((i) => {
+            // Priority: showdown card (from `cards` prop) → traitor-revealed card → face-down back.
+            const showdownCard = cards?.[i]
             const revealed = revealedCards?.[i]
+            const visibleCard = showdownCard || revealed
             const angle = i === 0 ? -18 : 8
             const offsetX = i === 0 ? 0 : 24
             const offsetY = i === 0 ? 6 : 5
@@ -123,8 +126,8 @@ export default function PlayerSeat({
                 }}
                 onClick={clickable ? (e) => { e.stopPropagation(); onCardClick(i) } : undefined}
               >
-                {revealed
-                  ? <CardFace card={revealed} flipping />
+                {visibleCard
+                  ? <CardFace card={visibleCard} flipping={!!revealed && !showdownCard} />
                   : <CardBack />
                 }
               </div>

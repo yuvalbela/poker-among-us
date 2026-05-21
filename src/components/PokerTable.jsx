@@ -21,6 +21,75 @@ const LANDSCAPE_POSITIONS = {
   6: [[50, 90], [3, 70],  [3, 20],  [50, 6],  [97, 20], [97, 70]],
 }
 
+// Compute the same ordered-players list + position array used by render — call this
+// from animation effects to keep "seat X is at coordinate Y" consistent.
+function computeSeatLayout(players, hands, meId, isLandscape) {
+  const sorted = [...players]
+    .filter((p) => {
+      if (!hands?.length) return true
+      return hands.some((h) => h.player_id === p.id)
+    })
+    .sort((a, b) => (a.seat_number ?? 99) - (b.seat_number ?? 99))
+  const myIdx = sorted.findIndex((p) => p.id === meId)
+  const ordered = myIdx >= 0
+    ? [...sorted.slice(myIdx), ...sorted.slice(0, myIdx)]
+    : sorted
+  const count = Math.min(ordered.length, 6)
+  const positions = isLandscape
+    ? (LANDSCAPE_POSITIONS[count] || LANDSCAPE_POSITIONS[2])
+    : (PORTRAIT_POSITIONS[count] || PORTRAIT_POSITIONS[2])
+  // Map: playerId -> [xPct, yPct]
+  const seatPos = {}
+  ordered.slice(0, count).forEach((p, i) => { seatPos[p.id] = positions[i] || [50, 50] })
+  return { ordered, count, positions, seatPos }
+}
+
+// Generic flying chip — animates from (fromX,fromY)% to (toX,toY)%.
+// Used both for pot→winners (showdown) and player→pot (bet).
+function FlyingChip({ fromX, fromY, toX, toY, amount, delay = 0, durationMs = 650 }) {
+  const [moved, setMoved] = useState(false)
+  useEffect(() => {
+    const t = setTimeout(() => setMoved(true), 30 + delay)
+    return () => clearTimeout(t)
+  }, [])
+  return (
+    <div
+      style={{
+        position: 'absolute',
+        left: moved ? `${toX}%` : `${fromX}%`,
+        top: moved ? `${toY}%` : `${fromY}%`,
+        transform: 'translate(-50%, -50%)',
+        transition: moved
+          ? `left ${durationMs}ms cubic-bezier(0.4,0,0.2,1), top ${durationMs}ms cubic-bezier(0.4,0,0.2,1), opacity 0.25s ${durationMs - 50}ms`
+          : 'none',
+        opacity: moved ? 0 : 1,
+        zIndex: 30,
+        pointerEvents: 'none',
+        display: 'flex',
+        alignItems: 'center',
+        gap: '4px',
+        background: 'rgba(15,10,0,0.92)',
+        border: '2px solid #e8c44a',
+        borderRadius: '999px',
+        padding: '4px 12px',
+        boxShadow: '0 0 16px rgba(232,196,74,0.7), 0 2px 8px rgba(0,0,0,0.5)',
+        whiteSpace: 'nowrap',
+      }}
+    >
+      <span style={{
+        display: 'inline-block',
+        width: '12px', height: '12px',
+        borderRadius: '50%',
+        background: 'radial-gradient(circle at 35% 30%, #fde68a 0%, #f0c040 45%, #b45309 100%)',
+        border: '1px solid #78350f',
+        boxShadow: 'inset 0 -1px 1px rgba(0,0,0,0.35), inset 0 1px 1px rgba(255,255,255,0.4)',
+        flexShrink: 0,
+      }} />
+      <span style={{ color: '#e8c44a', fontWeight: 800, fontSize: '14px' }}>{amount}</span>
+    </div>
+  )
+}
+
 function PotChip({ targetX, targetY, amount, delay = 0 }) {
   const [moved, setMoved] = useState(false)
   useEffect(() => {
@@ -52,7 +121,15 @@ function PotChip({ targetX, targetY, amount, delay = 0 }) {
         whiteSpace: 'nowrap',
       }}
     >
-      <span style={{ fontSize: '14px' }}>🪙</span>
+      <span style={{
+        display: 'inline-block',
+        width: '12px', height: '12px',
+        borderRadius: '50%',
+        background: 'radial-gradient(circle at 35% 30%, #fde68a 0%, #f0c040 45%, #b45309 100%)',
+        border: '1px solid #78350f',
+        boxShadow: 'inset 0 -1px 1px rgba(0,0,0,0.35), inset 0 1px 1px rgba(255,255,255,0.4)',
+        flexShrink: 0,
+      }} />
       <span style={{ color: '#e8c44a', fontWeight: 800, fontSize: '14px' }}>{amount}</span>
     </div>
   )
@@ -82,38 +159,89 @@ export default function PokerTable({
   const isLandscape = useOrientation()
 
   // ── Pot animation hooks (must be before any early return) ──
-  const prevPhaseRef = useRef(null)
+  const firedForRoundRef = useRef(null)   // id of round for which pot anim already fired (one-shot guard)
   const [potAnim, setPotAnim] = useState(null)
+  // ── Bet animation (player → pot) ──
+  const prevBetsRef = useRef({})            // playerId -> last seen current_bet
+  const [betAnims, setBetAnims] = useState([])    // [{id, fromX, fromY, amount}]
 
   const phase = round?.phase
 
   useEffect(() => {
-    const prev = prevPhaseRef.current
-    prevPhaseRef.current = phase
-    if (!((phase === 'showdown' || phase === 'finished') && prev !== phase)) return
+    // Fire pot animation once per round, only after winner is known.
+    // doShowdown does TWO updates: (1) phase='showdown' with winner_name=null
+    // (so hole cards unlock for evaluation), then (2) same phase + winner_name set.
+    // Listening to phase alone would fire on update #1 — before we know who won —
+    // and skip #2 (phase unchanged). So we wait for winner_name and use a
+    // one-shot ref keyed by round.id.
+    if (phase !== 'showdown' && phase !== 'finished') return
+    if (!round?.winner_name) return
+    if (firedForRoundRef.current === round.id) return
+    firedForRoundRef.current = round.id
     if (!round?.pot || !hands.length || !players.length) return
 
-    const sortedAnim = [...players].sort((a, b) => (a.seat_number ?? 99) - (b.seat_number ?? 99))
-    const animMyIdx = sortedAnim.findIndex((p) => p.id === me?.id)
-    const ord = animMyIdx >= 0
-      ? [...sortedAnim.slice(animMyIdx), ...sortedAnim.slice(0, animMyIdx)]
-      : sortedAnim
-    const cnt = Math.min(ord.length, 6)
-    const pos = isLandscape
-      ? (LANDSCAPE_POSITIONS[cnt] || LANDSCAPE_POSITIONS[2])
-      : (PORTRAIT_POSITIONS[cnt] || PORTRAIT_POSITIONS[2])
+    // Use the SAME ordering/positions the render uses — fixes the "pot goes to wrong
+    // seat after a player left" bug, since unfiltered players list was off-by-one.
+    const { seatPos } = computeSeatLayout(players, hands, me?.id, isLandscape)
 
-    const notFolded = hands.filter(h => h.status !== 'folded')
-    if (!notFolded.length) return
-    const share = Math.floor(round.pot / notFolded.length)
-    const targets = notFolded.map(h => {
-      const pidx = ord.findIndex(p => p.id === h.player_id)
-      const [px, py] = (pidx >= 0 && pos[pidx]) ? pos[pidx] : [50, 50]
+    // Pick actual winners (not just everyone who didn't fold).
+    // round.winner_name is a comma-joined list of winner names (single name for
+    // a clear win, multiple for a split). Fallback: any non-folded hand.
+    const winnerNames = (round.winner_name || '')
+      .split(',').map((s) => s.trim()).filter(Boolean)
+    let winnerHands
+    if (winnerNames.length) {
+      winnerHands = hands.filter((h) => {
+        const p = players.find((p) => p.id === h.player_id)
+        return p && winnerNames.includes(p.name)
+      })
+    }
+    if (!winnerHands || !winnerHands.length) {
+      winnerHands = hands.filter((h) => h.status !== 'folded')
+    }
+    if (!winnerHands.length) return
+    const share = Math.floor(round.pot / winnerHands.length)
+    const targets = winnerHands.map((h) => {
+      const [px, py] = seatPos[h.player_id] || [50, 50]
       return { tx: px, ty: py, amount: share }
     })
     setPotAnim(targets)
     setTimeout(() => setPotAnim(null), 1200)
-  }, [phase])
+  }, [phase, round?.winner_name, round?.id])
+
+  // --- Bet → pot animation: fire a chip when a player's current_bet increases ---
+  useEffect(() => {
+    if (!hands?.length || !players?.length || !round?.id) return
+    const { seatPos } = computeSeatLayout(players, hands, me?.id, isLandscape)
+    const newAnims = []
+    const nextBets = {}
+    for (const h of hands) {
+      const bet = h.current_bet ?? 0
+      nextBets[h.player_id] = bet
+      const prevBet = prevBetsRef.current[h.player_id] ?? 0
+      if (bet > prevBet) {
+        const delta = bet - prevBet
+        const [fx, fy] = seatPos[h.player_id] || [50, 50]
+        newAnims.push({
+          id: `${h.player_id}-${Date.now()}-${Math.random()}`,
+          fromX: fx, fromY: fy, amount: delta,
+        })
+      }
+    }
+    prevBetsRef.current = nextBets
+    if (newAnims.length) {
+      setBetAnims((prev) => [...prev, ...newAnims])
+      // Remove these specific anims after their animation finishes
+      const ids = new Set(newAnims.map((a) => a.id))
+      setTimeout(() => setBetAnims((prev) => prev.filter((a) => !ids.has(a.id))), 900)
+    }
+  }, [hands, round?.id, isLandscape])
+
+  // Reset prevBets when a new round starts, so the first preflop bet animates
+  // from 0 and not from previous round's leftover state.
+  useEffect(() => {
+    prevBetsRef.current = {}
+  }, [round?.id])
 
   if (!players.length) return null
 
@@ -227,9 +355,20 @@ export default function PokerTable({
           )}
         </div>{/* end cards/pot */}
 
-        {/* ── POT ANIMATION chips ── */}
+        {/* ── POT ANIMATION chips (pot → winners on showdown) ── */}
         {potAnim && potAnim.map((target, i) => (
           <PotChip key={i} targetX={target.tx} targetY={target.ty} amount={target.amount} delay={i * 120} />
+        ))}
+
+        {/* ── BET ANIMATION chips (player → pot on bet/raise/call/blind) ── */}
+        {betAnims.map((a) => (
+          <FlyingChip
+            key={a.id}
+            fromX={a.fromX} fromY={a.fromY}
+            toX={50} toY={50}
+            amount={a.amount}
+            durationMs={600}
+          />
         ))}
 
         </div>{/* end felt */}
@@ -280,7 +419,7 @@ export default function PokerTable({
             <PlayerSeat
               player={player}
               hand={hand}
-              cards={isMe ? myCards : (showdownRevealed ? allCards : null)}
+              cards={isMe ? myCards : (showdownRevealed && hand?.status !== 'folded' ? allCards : null)}
               revealedCards={isMe ? null : opponentRevealed}
               isMe={isMe}
               isCurrent={isCurrent}

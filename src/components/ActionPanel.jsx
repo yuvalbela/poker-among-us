@@ -2,6 +2,30 @@ import { useState } from 'react'
 import { HAND_CATEGORIES } from '../lib/pokerLogic.js'
 import { bestHandFor } from '../lib/pokerLogic.js'
 
+// Small chat button used inline in action rows (replaces the floating bubble).
+function ChatButton({ onChat, unreadCount }) {
+  return (
+    <button
+      onClick={onChat}
+      className="relative rounded-lg flex items-center justify-center transition-all active:scale-95"
+      style={{
+        background: '#0e4d33', color: 'white',
+        border: '1px solid rgba(255,255,255,0.15)',
+        width: '46px', flexShrink: 0,
+      }}
+      aria-label="פתח צ'אט"
+      title="צ'אט"
+    >
+      💬
+      {unreadCount > 0 && (
+        <span className="absolute -top-1 -right-1 bg-red-500 text-white text-[9px] font-bold w-4 h-4 rounded-full flex items-center justify-center">
+          {unreadCount > 9 ? '9+' : unreadCount}
+        </span>
+      )}
+    </button>
+  )
+}
+
 export default function ActionPanel({
   round,
   myHand,
@@ -10,6 +34,8 @@ export default function ActionPanel({
   turnSecondsLeft,
   onAction,
   busy,
+  onChat,        // open chat overlay
+  unreadCount,   // unread message count for chat badge
 }) {
   const [showBet, setShowBet] = useState(false)
   const [betAmt, setBetAmt] = useState(0)
@@ -46,7 +72,7 @@ export default function ActionPanel({
     else onAction('raise', betAmt)
   }
 
-  const btnBase = 'flex-1 py-3 rounded-lg font-bold uppercase tracking-wide text-sm transition-all active:scale-95 disabled:opacity-40'
+  const btnBase = 'flex-1 py-2 rounded-lg font-bold uppercase tracking-wide text-sm transition-all active:scale-95 disabled:opacity-40'
 
   // ── BET PANEL ────────────────────────────────────────────
   if (showBet) {
@@ -131,21 +157,48 @@ export default function ActionPanel({
 
   // ── DEFAULT ACTION BAR ────────────────────────────────────
   return (
-    <div className="space-y-2">
-      {/* YOUR TURN indicator + timer */}
-      <div className="flex items-center justify-end gap-2 px-1">
-        <span className="text-xs font-bold uppercase tracking-wider"
+    <div className="space-y-1">
+      {/* YOUR TURN indicator + timer — tight single-line */}
+      <div className="flex items-center justify-end gap-2 px-1" style={{ minHeight: '14px' }}>
+        <span className="text-[10px] font-bold uppercase tracking-wider"
           style={{ color: '#4caf50' }}>● YOUR TURN</span>
         {turnSecondsLeft !== null && (
-          <span className={`font-mono font-bold text-sm ${turnSecondsLeft <= 5 ? 'text-red-400' : 'text-white/60'}`}>
+          <span className={`font-mono font-bold text-xs ${turnSecondsLeft <= 5 ? 'text-red-400' : 'text-white/60'}`}>
             {turnSecondsLeft}s
           </span>
         )}
       </div>
 
-      {/* Action buttons */}
-      <div className="flex gap-2">
-        {/* BET / CALL quick */}
+      {/* Action buttons.
+          Visual order RIGHT→LEFT (page is dir=rtl, so first JSX child = right):
+          FOLD · CHECK · RAISE/CALL · CHAT */}
+      <div className="flex gap-2" style={{ minHeight: '44px' }}>
+        {/* FOLD — rightmost */}
+        <button onClick={() => onAction('fold')} disabled={busy}
+          className={btnBase}
+          style={{ background: 'transparent', color: '#e74c3c', border: '2px solid #e74c3c' }}>
+          FOLD
+        </button>
+
+        {/* CHECK (when no call needed) */}
+        {callAmount === 0 && (
+          <button onClick={() => onAction('check')} disabled={busy}
+            className={btnBase}
+            style={{ background: '#2a2a3a', color: 'white', border: '1px solid rgba(255,255,255,0.15)' }}>
+            CHECK
+          </button>
+        )}
+
+        {/* RAISE (only when there's a call AND we have chips beyond it) */}
+        {callAmount > 0 && chipsLeft > callAmount && (
+          <button onClick={initBet} disabled={busy}
+            className={btnBase}
+            style={{ background: 'transparent', color: '#4caf50', border: '2px solid #3d8b40' }}>
+            RAISE
+          </button>
+        )}
+
+        {/* CALL / BET — leftmost of the action triplet */}
         {callAmount > 0 ? (
           <button onClick={() => onAction('call')} disabled={busy}
             className={btnBase}
@@ -160,31 +213,12 @@ export default function ActionPanel({
           </button>
         )}
 
-        {/* BET (open panel) — only show if there's a call, so user can also raise */}
-        {callAmount > 0 && chipsLeft > callAmount && (
-          <button onClick={initBet} disabled={busy}
-            className={btnBase}
-            style={{ background: 'transparent', color: '#4caf50', border: '2px solid #3d8b40' }}>
-            RAISE
-          </button>
-        )}
-
-        {/* CHECK */}
-        {callAmount === 0 && (
-          <button onClick={() => onAction('check')} disabled={busy}
-            className={btnBase}
-            style={{ background: '#2a2a3a', color: 'white', border: '1px solid rgba(255,255,255,0.15)' }}>
-            CHECK
-          </button>
-        )}
-
-        {/* FOLD */}
-        <button onClick={() => onAction('fold')} disabled={busy}
-          className={btnBase}
-          style={{ background: 'transparent', color: '#e74c3c', border: '2px solid #e74c3c' }}>
-          FOLD
-        </button>
+        {/* CHAT — leftmost */}
+        {onChat && <ChatButton onChat={onChat} unreadCount={unreadCount} />}
       </div>
     </div>
   )
 }
+
+// Re-export for other consumers (Game.jsx pre-action row + showdown rows).
+export { ChatButton }

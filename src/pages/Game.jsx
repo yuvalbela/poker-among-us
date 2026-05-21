@@ -9,7 +9,7 @@ import { useTraitor } from '../lib/useTraitor.js'
 import VotingPanel from '../components/VotingPanel.jsx'
 import ResultPanel from '../components/ResultPanel.jsx'
 import PokerTable from '../components/PokerTable.jsx'
-import ActionPanel from '../components/ActionPanel.jsx'
+import ActionPanel, { ChatButton } from '../components/ActionPanel.jsx'
 import JoinRequestForm from '../components/JoinRequestForm.jsx'
 import JoinRequestsPanel from '../components/JoinRequestsPanel.jsx'
 
@@ -519,19 +519,23 @@ export default function Game() {
         </div>
       </div>
 
-      {/* ── BOTTOM PANEL — fixed height, no scroll ── */}
-      <div style={{ flexShrink: 0, padding: '4px 8px 8px' }}>
-        {/* Winner banner */}
-        {(round.phase === 'showdown' || round.phase === 'finished') && round.winner_name && (
-          <div className="rounded-lg px-3 py-1.5 mb-2 text-center text-sm font-bold"
-            style={{ background: 'rgba(180,130,0,0.2)', border: '1px solid rgba(180,130,0,0.4)', color: '#f0c040' }}>
-            🏆 {round.winner_name} ניצח
-            {round.win_reason === 'fold' && ' · כולם פולד'}
-            {round.win_reason === 'split' && ' · תיקו'}
-            {round.win_reason && round.win_reason !== 'fold' && round.win_reason !== 'split' && ` · ${round.win_reason}`}
-            {' '}({round.pot} 💰)
-          </div>
-        )}
+      {/* ── BOTTOM PANEL — stable height: each sub-area reserves a tight slot so the
+              table above doesn't shift when banners/traitor/buttons appear/disappear.
+              Slots are tuned to the minimum that prevents visible jiggle. ── */}
+      <div style={{ flexShrink: 0, padding: '2px 8px 6px' }}>
+        {/* Banner slot — winner banner only shows at round end */}
+        <div style={{ minHeight: '24px' }}>
+          {(round.phase === 'showdown' || round.phase === 'finished') && round.winner_name && (
+            <div className="rounded-lg px-3 py-1 text-center text-xs font-bold"
+              style={{ background: 'rgba(180,130,0,0.2)', border: '1px solid rgba(180,130,0,0.4)', color: '#f0c040' }}>
+              🏆 {round.winner_name} ניצח
+              {round.win_reason === 'fold' && ' · כולם פולד'}
+              {round.win_reason === 'split' && ' · תיקו'}
+              {round.win_reason && round.win_reason !== 'fold' && round.win_reason !== 'split' && ` · ${round.win_reason}`}
+              {' '}({round.pot} 💰)
+            </div>
+          )}
+        </div>
 
         {/* Join requests — admin only */}
         {isAdmin && <JoinRequestsPanel room={room} />}
@@ -545,8 +549,10 @@ export default function Game() {
           </div>
         )}
 
-        {/* Traitor abilities — above action buttons */}
-        <TraitorPanel traitor={traitor} players={players} />
+        {/* Traitor slot — single-line inline panel reserves 22px */}
+        <div style={{ minHeight: '22px' }}>
+          <TraitorPanel traitor={traitor} />
+        </div>
 
         {/* Action panel */}
         {isMyTurn && (
@@ -558,13 +564,17 @@ export default function Game() {
             turnSecondsLeft={turnSecondsLeft}
             onAction={doAction}
             busy={busy}
+            onChat={() => setChatOpen((o) => !o)}
+            unreadCount={unreadCount}
           />
         )}
 
-        {/* Pre-action buttons — when it's NOT my turn */}
+        {/* Pre-action buttons — when it's NOT my turn.
+            Layout matches the my-turn ActionPanel: 1 status line + 1 row of buttons,
+            same heights. Buttons (right→left in RTL): FOLD · CHECK · CHECK OR FOLD · CHAT */}
         {!isMyTurn && myHand?.status === 'active' && round.phase !== 'showdown' && round.phase !== 'finished' && room.game_phase === 'poker' && (
-          <div className="space-y-1.5">
-            <div className="flex items-center justify-center gap-2">
+          <div className="space-y-1">
+            <div className="flex items-center justify-end gap-2 px-1" style={{ minHeight: '14px' }}>
               <span className="text-white/30 text-[10px] uppercase tracking-wider">
                 ממתין ל-{players.find((p) => p.id === hands.find((h) => h.seat_index === round.current_turn_index)?.player_id)?.name || '?'}
               </span>
@@ -574,23 +584,22 @@ export default function Game() {
                 if (!stuckPlayer?.left_game) return null
                 return <span className="text-[10px] text-orange-400">⚡ פולד אוטומטי...</span>
               })()}
+              {preAction && <span className="text-[9px] text-white/30">· לחץ שוב לביטול</span>}
             </div>
-            {/* Big CHECK OR FOLD button */}
-            <button
-              onClick={() => setPreAction(a => a === 'check_or_fold' ? null : 'check_or_fold')}
-              className="w-full py-2.5 rounded-lg font-bold text-sm uppercase tracking-wide"
-              style={{
-                background: preAction === 'check_or_fold' ? 'rgba(255,255,255,0.15)' : 'rgba(255,255,255,0.07)',
-                border: preAction === 'check_or_fold' ? '1px solid rgba(255,255,255,0.5)' : '1px solid rgba(255,255,255,0.15)',
-                color: preAction === 'check_or_fold' ? 'white' : 'rgba(255,255,255,0.5)',
-              }}>
-              {preAction === 'check_or_fold' ? '✓ ' : ''}CHECK OR FOLD
-            </button>
-            {/* CHECK + FOLD row */}
-            <div className="flex gap-1.5">
+            <div className="flex gap-2" style={{ minHeight: '44px' }}>
+              <button
+                onClick={() => setPreAction(a => a === 'fold' ? null : 'fold')}
+                className="flex-1 py-2 rounded-lg font-bold uppercase tracking-wide text-sm transition-all active:scale-95"
+                style={{
+                  background: 'transparent',
+                  border: preAction === 'fold' ? '2px solid #e74c3c' : '1px solid rgba(231,76,60,0.4)',
+                  color: preAction === 'fold' ? '#e74c3c' : 'rgba(231,76,60,0.5)',
+                }}>
+                {preAction === 'fold' ? '✓ ' : ''}FOLD
+              </button>
               <button
                 onClick={() => setPreAction(a => a === 'check' ? null : 'check')}
-                className="flex-1 py-2 rounded-lg font-bold text-sm uppercase"
+                className="flex-1 py-2 rounded-lg font-bold uppercase tracking-wide text-sm transition-all active:scale-95"
                 style={{
                   background: 'transparent',
                   border: preAction === 'check' ? '2px solid #4caf50' : '1px solid rgba(76,175,80,0.4)',
@@ -599,21 +608,17 @@ export default function Game() {
                 {preAction === 'check' ? '✓ ' : ''}CHECK
               </button>
               <button
-                onClick={() => setPreAction(a => a === 'fold' ? null : 'fold')}
-                className="flex-1 py-2 rounded-lg font-bold text-sm uppercase"
+                onClick={() => setPreAction(a => a === 'check_or_fold' ? null : 'check_or_fold')}
+                className="flex-1 py-2 rounded-lg font-bold uppercase tracking-wide text-sm transition-all active:scale-95"
                 style={{
-                  background: 'transparent',
-                  border: preAction === 'fold' ? '2px solid #e74c3c' : '1px solid rgba(231,76,60,0.4)',
-                  color: preAction === 'fold' ? '#e74c3c' : 'rgba(231,76,60,0.5)',
+                  background: preAction === 'check_or_fold' ? 'rgba(255,255,255,0.15)' : 'rgba(255,255,255,0.07)',
+                  border: preAction === 'check_or_fold' ? '1px solid rgba(255,255,255,0.5)' : '1px solid rgba(255,255,255,0.15)',
+                  color: preAction === 'check_or_fold' ? 'white' : 'rgba(255,255,255,0.5)',
                 }}>
-                {preAction === 'fold' ? '✓ ' : ''}FOLD
+                {preAction === 'check_or_fold' ? '✓ ' : ''}<span className="text-[11px]">CHECK</span> / <span className="text-[11px]">FOLD</span>
               </button>
+              <ChatButton onChat={() => setChatOpen((o) => !o)} unreadCount={unreadCount} />
             </div>
-            {preAction && (
-              <div className="text-center text-[10px] text-white/30">
-                לחץ שוב לביטול
-              </div>
-            )}
           </div>
         )}
 
@@ -651,20 +656,8 @@ export default function Game() {
 
       {/* ── TRAITOR ABILITIES — inline in bottom panel, handled in bottom section ── */}
 
-      {/* Floating chat button with unread badge */}
-      <button
-        onClick={() => setChatOpen((o) => !o)}
-        className="fixed bottom-5 left-5 z-50 w-12 h-12 rounded-full bg-emerald-700 hover:bg-emerald-600 border-2 border-emerald-400 flex items-center justify-center shadow-lg"
-      >
-        💬
-        {unreadCount > 0 && (
-          <span className="absolute -top-1 -right-1 bg-red-500 text-white text-[10px] font-bold w-5 h-5 rounded-full flex items-center justify-center">
-            {unreadCount > 9 ? '9+' : unreadCount}
-          </span>
-        )}
-      </button>
-
-      {/* Chat panel */}
+      {/* Chat panel (the floating-bubble launcher was removed; chat is now opened
+          from the action row's ChatButton, see ActionPanel.jsx + pre-action row) */}
       {chatOpen && (
         <div className="fixed bottom-20 left-5 z-50 w-72 bg-emerald-950 border-2 border-emerald-600 rounded-2xl shadow-2xl flex flex-col overflow-hidden"
           style={{ height: '380px' }}>
