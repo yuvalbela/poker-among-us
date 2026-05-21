@@ -1,9 +1,10 @@
 import { RANK_CHAR, SUIT_SYMBOL } from '../lib/pokerLogic.js'
 import MaskIcon from './MaskIcon.jsx'
 
-function CardBack() {
+function CardBack({ small = false }) {
+  const sz = small ? 'w-11 h-16' : 'w-14 h-20'
   return (
-    <div className="w-14 h-20 rounded-md flex items-center justify-center shadow-md"
+    <div className={`${sz} rounded-md flex items-center justify-center shadow-md`}
       style={{
         background: 'linear-gradient(145deg, #b91c1c, #7f1d1d)',
         border: '2px solid rgba(255,255,255,0.9)',
@@ -14,24 +15,28 @@ function CardBack() {
   )
 }
 
-function CardFace({ card, flipping = false }) {
-  if (!card) return <CardBack />
+function CardFace({ card, flipping = false, small = false }) {
+  if (!card) return <CardBack small={small} />
   const isRed = card.suit === 'h' || card.suit === 'd'
   const rank = RANK_CHAR[card.rank] || String(card.rank)
   const suit = SUIT_SYMBOL[card.suit]
   const color = isRed ? '#dc2626' : '#111'
+  const sz = small ? 'w-11 h-16' : 'w-14 h-20'
+  const rankSize = small ? '12px' : '15px'
+  const suitSize = small ? '10px' : '13px'
+  const centerSize = small ? '26px' : '34px'
   return (
-    <div className={`w-14 h-20 rounded-md bg-white border border-gray-200 relative shadow ${flipping ? 'animate-flip' : ''}`}
+    <div className={`${sz} rounded-md bg-white border border-gray-200 relative shadow ${flipping ? 'animate-flip' : ''}`}
       style={{ borderColor: '#d1d5db' }}>
       {/* Top-left: rank + suit small */}
       <div className="absolute top-0.5 left-1 flex flex-col items-center leading-none"
         style={{ color }}>
-        <span style={{ fontSize: '15px', fontWeight: 800, lineHeight: 1 }}>{rank}</span>
-        <span style={{ fontSize: '13px', lineHeight: 1 }}>{suit}</span>
+        <span style={{ fontSize: rankSize, fontWeight: 800, lineHeight: 1 }}>{rank}</span>
+        <span style={{ fontSize: suitSize, lineHeight: 1 }}>{suit}</span>
       </div>
       {/* Center: large suit */}
       <div className="absolute inset-0 flex items-center justify-center"
-        style={{ color, fontSize: '34px', lineHeight: 1 }}>
+        style={{ color, fontSize: centerSize, lineHeight: 1 }}>
         {suit}
       </div>
     </div>
@@ -42,6 +47,8 @@ export default function PlayerSeat({
   player, hand, cards, revealedCards,
   isMe, isCurrent, isDealer, isSB, isBB,
   chatMessage,
+  bubbleBelow = false,  // when true (top-of-table seats), chat bubble renders below cards instead of above
+  small = false,        // compact size for portrait/mobile (≈80% of desktop)
   // Traitor click handlers — when provided, cards/seat become clickable + highlighted.
   onCardClick,   // (cardIndex) => void   — fires on tapping a single card
   onSeatClick,   // () => void            — fires on tapping the seat (view-hand)
@@ -57,12 +64,20 @@ export default function PlayerSeat({
   // Pulsing red glow used for traitor-clickable elements
   const glow = '0 0 0 2px #ef4444, 0 0 12px rgba(239,68,68,0.7)'
 
+  // Size constants — keep all card layout maths in one place
+  const cardOffsetX  = small ? 19 : 24
+  const cardOffsetY  = small ? 4  : 5
+  const cardContainerW = small ? 63 : 80
+  const cardContainerH = small ? 70 : 88
+  const seatMinWidth = small ? 70 : 84
+
   return (
     <div className={`flex flex-col items-center select-none ${folded ? 'opacity-45' : ''}`}
-      style={{ gap: '3px', minWidth: '84px' }}>
+      style={{ gap: '3px', minWidth: `${seatMinWidth}px` }}>
 
-      {/* Speech bubble */}
-      {chatMessage && (
+      {/* Speech bubble — rendered above for bottom/side seats; below for top seats
+          to avoid clipping past the table edge */}
+      {chatMessage && !bubbleBelow && (
         <div className="max-w-[110px] bg-white/95 text-gray-800 text-[10px] px-2 py-1 rounded-lg shadow-lg truncate mb-0.5"
           style={{ border: '1px solid rgba(0,0,0,0.1)' }}>
           {chatMessage}
@@ -72,11 +87,11 @@ export default function PlayerSeat({
       {/* Cards — fanned/angled */}
       {isMe ? (
         // My cards: also fanned
-        <div className="relative" style={{ width: '80px', height: '88px' }}>
+        <div className="relative" style={{ width: `${cardContainerW}px`, height: `${cardContainerH}px` }}>
           {(cards || [null, null]).map((c, i) => {
             const angle = i === 0 ? -18 : 8
-            const offsetX = i === 0 ? 0 : 24
-            const offsetY = i === 0 ? 6 : 5
+            const offsetX = i === 0 ? 0 : cardOffsetX
+            const offsetY = i === 0 ? cardOffsetY + 1 : cardOffsetY
             const clickable = !!onCardClick && cardsHighlight
             return (
               <div key={i} style={{
@@ -92,22 +107,22 @@ export default function PlayerSeat({
                 animation: clickable ? 'traitor-pulse 1.5s ease-in-out infinite' : undefined,
               }}
               onClick={clickable ? (e) => { e.stopPropagation(); onCardClick(i) } : undefined}>
-                <CardFace card={c} />
+                <CardFace card={c} small={small} />
               </div>
             )
           })}
         </div>
       ) : (
         // Opponents: fanned with angle and overlap
-        <div className="relative" style={{ width: '80px', height: '88px' }}>
+        <div className="relative" style={{ width: `${cardContainerW}px`, height: `${cardContainerH}px` }}>
           {[0, 1].map((i) => {
             // Priority: showdown card (from `cards` prop) → traitor-revealed card → face-down back.
             const showdownCard = cards?.[i]
             const revealed = revealedCards?.[i]
             const visibleCard = showdownCard || revealed
             const angle = i === 0 ? -18 : 8
-            const offsetX = i === 0 ? 0 : 24
-            const offsetY = i === 0 ? 6 : 5
+            const offsetX = i === 0 ? 0 : cardOffsetX
+            const offsetY = i === 0 ? cardOffsetY + 1 : cardOffsetY
             const clickable = !!onCardClick && cardsHighlight
             return (
               <div
@@ -127,8 +142,8 @@ export default function PlayerSeat({
                 onClick={clickable ? (e) => { e.stopPropagation(); onCardClick(i) } : undefined}
               >
                 {visibleCard
-                  ? <CardFace card={visibleCard} flipping={!!revealed && !showdownCard} />
-                  : <CardBack />
+                  ? <CardFace card={visibleCard} flipping={!!revealed && !showdownCard} small={small} />
+                  : <CardBack small={small} />
                 }
               </div>
             )
@@ -167,6 +182,14 @@ export default function PlayerSeat({
       {bet > 0 && (
         <div className="text-[10px] bg-amber-700/80 text-amber-100 px-1.5 py-0.5 rounded-full font-bold">
           {bet}
+        </div>
+      )}
+
+      {/* Speech bubble — below variant, for top-of-table seats */}
+      {chatMessage && bubbleBelow && (
+        <div className="max-w-[110px] bg-white/95 text-gray-800 text-[10px] px-2 py-1 rounded-lg shadow-lg truncate mt-0.5"
+          style={{ border: '1px solid rgba(0,0,0,0.1)' }}>
+          {chatMessage}
         </div>
       )}
     </div>

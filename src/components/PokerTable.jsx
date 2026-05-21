@@ -5,20 +5,24 @@ import PlayerSeat from './PlayerSeat.jsx'
 
 // Seat positions as [xPercent, yPercent] relative to the table container
 // Index 0 = "me" (always bottom-center), rest = opponents clockwise from top
+// Positions are seat CENTERS as [x%, y%]. The PlayerSeat is ~150px tall
+// (cards 88 + seat box 26 + bet chip 20 + chat bubble 30). Each seat is
+// centered with translate(-50%, -50%), so the box extends ~75px above/below
+// its center. We keep extreme seats away from 0/100% edges to avoid clipping.
 const PORTRAIT_POSITIONS = {
-  2: [[50, 90], [50, 12]],
-  3: [[50, 90], [8, 12],  [92, 12]],
-  4: [[50, 90], [5, 50],  [50, 12],  [95, 50]],
-  5: [[50, 90], [5, 68],  [8, 14],  [92, 14], [95, 68]],
-  6: [[50, 90], [5, 72],  [5, 22],  [50, 12],  [95, 22], [95, 72]],
+  2: [[50, 85], [50, 17]],
+  3: [[50, 85], [10, 17], [90, 17]],
+  4: [[50, 85], [7, 50],  [50, 17], [93, 50]],
+  5: [[50, 85], [7, 65],  [10, 19], [90, 19], [93, 65]],
+  6: [[50, 85], [7, 70],  [7, 24],  [50, 17], [93, 24], [93, 70]],
 }
 
 const LANDSCAPE_POSITIONS = {
-  2: [[50, 90], [50, 6]],
-  3: [[50, 90], [8, 8],  [92, 8]],
-  4: [[50, 90], [3, 46],  [50, 6],  [97, 46]],
-  5: [[50, 90], [3, 66],  [8, 8],   [92, 8],  [97, 66]],
-  6: [[50, 90], [3, 70],  [3, 20],  [50, 6],  [97, 20], [97, 70]],
+  2: [[50, 88], [50, 12]],
+  3: [[50, 88], [10, 14], [90, 14]],
+  4: [[50, 88], [5, 48],  [50, 12], [95, 48]],
+  5: [[50, 88], [5, 64],  [10, 14], [90, 14], [95, 64]],
+  6: [[50, 88], [5, 68],  [5, 24],  [50, 12], [95, 24], [95, 68]],
 }
 
 // Compute the same ordered-players list + position array used by render — call this
@@ -344,7 +348,7 @@ export default function PokerTable({
             <div className="flex gap-1">
               {Array.from({ length: 5 }).map((_, i) => (
                 <Card key={i} card={round.community_cards[i]} hidden={!round.community_cards[i]}
-                  small={false} />
+                  small={!isLandscape} />
               ))}
             </div>
           )}
@@ -428,6 +432,7 @@ export default function PokerTable({
               isBB={seatIdx === bbIdx}
               chatMessage={lastMessages?.[player.id]}
               small={!isLandscape}
+              bubbleBelow={yPct < 35}
               onCardClick={onCardClick}
               onSeatClick={onSeatClick}
               cardsHighlight={cardsHighlight}
