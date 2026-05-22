@@ -14,7 +14,7 @@ export default function JoinRequestsPanel({ room }) {
       if (!cancelled) setRequests(data || [])
     }
     load()
-    const ch = supabase.channel(`jr:${room.id}`)
+    const ch = supabase.channel(`jr:${room.id}:${Date.now()}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'join_requests', filter: `room_id=eq.${room.id}` }, load)
       .subscribe()
     return () => { cancelled = true; supabase.removeChannel(ch) }

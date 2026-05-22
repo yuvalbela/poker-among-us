@@ -69,7 +69,7 @@ function SeatButton({ seatNum, player, isMe, onClick }) {
 export default function SeatingLobby({
   room, players, me, isAdmin,
   isSpectator = false, currentRound = null, myJoinRequest = null,
-  onSit, onLeave, onShuffle, onStartGame,
+  onSit, onLeave, onShuffle, onStartGame, starting = false,
   roomCode, onOpenSettings,
 }) {
   const [sitModal, setSitModal] = useState(null)
@@ -87,7 +87,7 @@ export default function SeatingLobby({
     let cancelled = false
     supabase.from('messages').select('*').eq('room_id', room.id).order('created_at')
       .then(({ data }) => { if (!cancelled) setMessages(data || []) })
-    const ch = supabase.channel(`seating-chat:${room.id}`)
+    const ch = supabase.channel(`seating-chat:${room.id}:${Date.now()}`)
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `room_id=eq.${room.id}` },
         (p) => {
           setMessages(prev => prev.some(m => m.id === p.new.id) ? prev : [...prev, p.new])
@@ -221,10 +221,13 @@ export default function SeatingLobby({
             </button>
             <button
               onClick={onStartGame}
-              disabled={!allSeated}
+              disabled={!allSeated || starting}
               className="flex-1 py-2 rounded-lg text-sm font-bold uppercase"
-              style={{ background: allSeated ? '#2d7a3c' : '#1a3a22', color: allSeated ? 'white' : 'rgba(255,255,255,0.3)' }}>
-              התחל משחק
+              style={{
+                background: !allSeated || starting ? '#1a3a22' : '#2d7a3c',
+                color: !allSeated || starting ? 'rgba(255,255,255,0.3)' : 'white',
+              }}>
+              {starting ? 'מתחיל...' : 'התחל משחק'}
             </button>
           </div>
         )}

@@ -21,7 +21,7 @@ export default function ResultPanel({ room, players, roundNumber, isAdmin, onNex
     }
     load()
     const ch = supabase
-      .channel(`result-votes:${room.id}:${roundNumber}`)
+      .channel(`result-votes:${room.id}:${roundNumber}:${Date.now()}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'votes', filter: `room_id=eq.${room.id}` }, load)
       .subscribe()
     return () => { cancelled = true; supabase.removeChannel(ch) }

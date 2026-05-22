@@ -114,9 +114,10 @@ export async function startNewRound({ roomId, players, settings = {}, roundNumbe
     { round_id: round.id, player_id: seated[bbIdx].id, phase: 'preflop', action: 'big_blind', amount: bbAmt },
   ])
 
+  // Atomic blind deductions — same reason as in takeAction.
   await Promise.all([
-    supabase.from('players').update({ chips: sbHand.chips_at_start - sbAmt }).eq('id', seated[sbIdx].id),
-    supabase.from('players').update({ chips: bbHand.chips_at_start - bbAmt }).eq('id', seated[bbIdx].id),
+    supabase.rpc('adjust_player_chips', { p_player_id: seated[sbIdx].id, p_delta: -sbAmt }),
+    supabase.rpc('adjust_player_chips', { p_player_id: seated[bbIdx].id, p_delta: -bbAmt }),
   ])
 
   return round.id
@@ -184,8 +185,12 @@ export async function takeAction({ roundId, playerId, action, raiseTo = 0 }) {
     .eq('id', myHand.id)
 
   if (amountAdded > 0) {
-    const { data: p } = await supabase.from('players').select('chips').eq('id', myHand.player_id).single()
-    if (p) await supabase.from('players').update({ chips: p.chips - amountAdded }).eq('id', myHand.player_id)
+    // Atomic decrement to avoid SELECT-then-UPDATE races with concurrent
+    // chip changes (e.g., a pot distribution arriving at the same time).
+    await supabase.rpc('adjust_player_chips', {
+      p_player_id: myHand.player_id,
+      p_delta: -amountAdded,
+    })
   }
 
   await supabase.from('game_actions').insert({
@@ -361,8 +366,8 @@ async function doShowdown(round, hands, pot) {
   for (let i = 0; i < winners.length; i++) {
     const wid = winners[i].hand.player_id
     const extra = i === 0 ? remainder : 0
-    const { data: p } = await supabase.from('players').select('chips').eq('id', wid).single()
-    if (p) await supabase.from('players').update({ chips: p.chips + share + extra }).eq('id', wid)
+    // Atomic add — see adjust_player_chips comment in takeAction.
+    await supabase.rpc('adjust_player_chips', { p_player_id: wid, p_delta: share + extra })
   }
   // Get winner names for display
   const winnerPlayerIds = winners.map(w => w.hand.player_id)
@@ -381,13 +386,10 @@ async function doShowdown(round, hands, pot) {
 }
 
 async function finishOneWinner(round, hands, winnerHand, pot) {
+  // Atomic add — see adjust_player_chips comment in takeAction.
+  await supabase.rpc('adjust_player_chips', { p_player_id: winnerHand.player_id, p_delta: pot })
   const { data: p } = await supabase
-    .from('players').select('chips, name').eq('id', winnerHand.player_id).single()
-  if (p) {
-    await supabase.from('players')
-      .update({ chips: p.chips + pot })
-      .eq('id', winnerHand.player_id)
-  }
+    .from('players').select('name').eq('id', winnerHand.player_id).single()
   await supabase.from('game_rounds').update({
     phase: 'finished',
     pot,

@@ -60,7 +60,7 @@ export default function Game() {
           .from('game_rounds')
           .select('*')
           .eq('room_id', roomData.id)
-          .order('round_number', { ascending: false })
+          .order('round_number', { ascending: false }).order('created_at', { ascending: false })
           .limit(1)
           .maybeSingle(),
       ])
@@ -96,7 +96,7 @@ export default function Game() {
           .from('game_rounds')
           .select('*')
           .eq('room_id', roomData.id)
-          .order('round_number', { ascending: false })
+          .order('round_number', { ascending: false }).order('created_at', { ascending: false })
           .limit(1)
           .maybeSingle()
         if (!cancelled && data) {
@@ -107,7 +107,7 @@ export default function Game() {
       }
 
       const playersCh = supabase
-        .channel(`game-players:${roomData.id}`)
+        .channel(`game-players:${roomData.id}:${Date.now()}`)
         .on('postgres_changes', { event: '*', schema: 'public', table: 'players', filter: `room_id=eq.${roomData.id}` }, async () => {
           const { data } = await supabase.from('players').select('*').eq('room_id', roomData.id).order('joined_at')
           if (!cancelled) setPlayers(data || [])
@@ -118,13 +118,13 @@ export default function Game() {
       channels.push(playersCh)
 
       const roundsCh = supabase
-        .channel(`game-rounds:${roomData.id}`)
+        .channel(`game-rounds:${roomData.id}:${Date.now()}`)
         .on('postgres_changes', { event: '*', schema: 'public', table: 'game_rounds', filter: `room_id=eq.${roomData.id}` }, async () => {
           const { data } = await supabase
             .from('game_rounds')
             .select('*')
             .eq('room_id', roomData.id)
-            .order('round_number', { ascending: false })
+            .order('round_number', { ascending: false }).order('created_at', { ascending: false })
             .limit(1)
             .maybeSingle()
           if (!cancelled) setRound(data || null)
@@ -158,7 +158,7 @@ export default function Game() {
   useEffect(() => {
     if (!round) return
     const ch = supabase
-      .channel(`game-hands:${round.id}`)
+      .channel(`game-hands:${round.id}:${Date.now()}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'player_hands', filter: `round_id=eq.${round.id}` }, async () => {
         const { data } = await supabase.from('player_hands').select('*').eq('round_id', round.id).order('seat_index')
         if (data) setHands(data)
@@ -235,7 +235,7 @@ export default function Game() {
           setLastSeenCount(data?.length || 0)
         }
       })
-    const ch = supabase.channel(`game-chat:${room.id}`)
+    const ch = supabase.channel(`game-chat:${room.id}:${Date.now()}`)
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `room_id=eq.${room.id}` },
         (p) => {
           setMessages((prev) => {
@@ -285,7 +285,7 @@ export default function Game() {
       if (!cancelled) setMyJoinRequest(data || null)
     }
     load()
-    const ch = supabase.channel(`my-jr:${room.id}:${userId}`)
+    const ch = supabase.channel(`my-jr:${room.id}:${userId}:${Date.now()}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'join_requests',
         filter: `room_id=eq.${room.id}` }, load)
       .subscribe()
@@ -328,32 +328,43 @@ export default function Game() {
     }
   }, [isMyTurn, preAction])
 
-  // Player turn timer
+  // Player turn timer — runs on ALL clients so a disconnected current player
+  // doesn't stall the round. Local UI countdown uses the same numbers; the
+  // server enforces expiry via the auto_fold_stuck_player RPC.
   const playerTimerSeconds = room?.settings?.playerTimerSeconds ?? 0
   const [turnSecondsLeft, setTurnSecondsLeft] = useState(null)
 
   useEffect(() => {
-    if (!isMyTurn || !playerTimerSeconds || !round?.turn_started_at) {
+    if (!playerTimerSeconds || !round?.turn_started_at || !round?.id) {
       setTurnSecondsLeft(null)
       return
     }
-    let didAutoFold = false
+    if (round.phase === 'showdown' || round.phase === 'finished') {
+      setTurnSecondsLeft(null)
+      return
+    }
+    let triggered = false
     function tick() {
       const elapsed = Math.floor((Date.now() - new Date(round.turn_started_at).getTime()) / 1000)
       const left = Math.max(0, playerTimerSeconds - elapsed)
-      setTurnSecondsLeft(left)
-      if (left === 0 && !didAutoFold) {
-        didAutoFold = true
-        doAction('fold')
+      // Only show the visible countdown to the current player
+      setTurnSecondsLeft(isMyTurn ? left : null)
+      // Once we're past the server's grace (5s), any client can call the RPC.
+      // The server re-checks the time, so duplicate calls from multiple clients
+      // are harmless.
+      if (elapsed >= playerTimerSeconds + 5 && !triggered) {
+        triggered = true
+        supabase.rpc('auto_fold_stuck_player', { p_round_id: round.id })
+          .catch(() => {/* server validates; client errors are non-fatal */})
       }
     }
     tick()
     const id = setInterval(tick, 500)
     return () => clearInterval(id)
-  }, [isMyTurn, playerTimerSeconds, round?.turn_started_at])
+  }, [isMyTurn, playerTimerSeconds, round?.turn_started_at, round?.id, round?.phase])
 
   async function doAction(action, amount = 0) {
-    if (!round || !me) return
+    if (!round || !me || busy) return  // re-entry guard
     setError('')
     setBusy(true)
     try {
@@ -377,20 +388,26 @@ export default function Game() {
   }
 
   async function startVoting() {
-    if (!isAdmin || !room) return
-    await supabase.from('rooms').update({
-      game_phase: 'voting',
-      voting_started_at: new Date().toISOString(),
-    }).eq('id', room.id)
+    if (!isAdmin || !room || busy) return
+    setBusy(true)
+    try {
+      await supabase.from('rooms').update({
+        game_phase: 'voting',
+        voting_started_at: new Date().toISOString(),
+      }).eq('id', room.id)
+    } finally { setBusy(false) }
   }
 
   async function revealResult() {
-    if (!isAdmin || !room || !round) return
-    const { error } = await supabase.rpc('reveal_voting_result', {
-      p_room_id: room.id,
-      p_round_number: round.round_number,
-    })
-    if (error) setError(error.message)
+    if (!isAdmin || !room || !round || busy) return
+    setBusy(true)
+    try {
+      const { error } = await supabase.rpc('reveal_voting_result', {
+        p_room_id: room.id,
+        p_round_number: round.round_number,
+      })
+      if (error) setError(error.message)
+    } finally { setBusy(false) }
   }
 
   async function handleExit() {
@@ -413,7 +430,7 @@ export default function Game() {
   }
 
   async function nextRound() {
-    if (!isAdmin || !room) return
+    if (!isAdmin || !room || busy) return  // re-entry guard
     setError('')
     setBusy(true)
     try {
@@ -428,7 +445,7 @@ export default function Game() {
         .from('game_rounds')
         .select('round_number, dealer_index')
         .eq('room_id', room.id)
-        .order('round_number', { ascending: false })
+        .order('round_number', { ascending: false }).order('created_at', { ascending: false })
         .limit(1)
         .single()
       // Re-fetch players fresh from DB to get latest left_game status

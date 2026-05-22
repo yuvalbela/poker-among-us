@@ -16,6 +16,8 @@ export default function Lobby() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [showSettings, setShowSettings] = useState(false)
+  const [starting, setStarting] = useState(false)  // guards against double-click on "Start Game"
+  const [acting, setActing] = useState(false)      // guards Sit / JoinRequest / Leave
 
   // Load room + subscribe
   useEffect(() => {
@@ -35,7 +37,7 @@ export default function Lobby() {
       }
 
       // Subscribe players
-      const pSub = supabase.channel(`lobby-players:${roomData.id}`)
+      const pSub = supabase.channel(`lobby-players:${roomData.id}:${Date.now()}`)
         .on('postgres_changes', { event: '*', schema: 'public', table: 'players', filter: `room_id=eq.${roomData.id}` },
           async () => {
             const { data } = await supabase.from('players').select('*').eq('room_id', roomData.id).order('seat_number')
@@ -45,7 +47,7 @@ export default function Lobby() {
       subs.push(pSub)
 
       // Subscribe room
-      const rSub = supabase.channel(`lobby-room:${roomData.id}`)
+      const rSub = supabase.channel(`lobby-room:${roomData.id}:${Date.now()}`)
         .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'rooms', filter: `id=eq.${roomData.id}` },
           (payload) => { if (!cancelled) setRoom(payload.new) })
         .subscribe()
@@ -74,7 +76,7 @@ export default function Lobby() {
   useEffect(() => {
     if (room?.status !== 'playing' || !room?.id) return
     supabase.from('game_rounds').select('round_number, phase')
-      .eq('room_id', room.id).order('round_number', { ascending: false }).limit(1).maybeSingle()
+      .eq('room_id', room.id).order('round_number', { ascending: false }).order('created_at', { ascending: false }).limit(1).maybeSingle()
       .then(({ data }) => setCurrentRound(data || null))
   }, [room?.status, room?.id])
 
@@ -88,7 +90,7 @@ export default function Lobby() {
       if (!cancelled) setMyJoinRequest(data || null)
     }
     load()
-    const ch = supabase.channel(`lobby-jr:${room.id}`)
+    const ch = supabase.channel(`lobby-jr:${room.id}:${Date.now()}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'join_requests',
         filter: `room_id=eq.${room.id}` }, load)
       .subscribe()
@@ -117,8 +119,9 @@ export default function Lobby() {
   const isAdmin = room?.admin_user_id === userId
 
   async function handleSit(seatNum, name, chips) {
+    if (!room || acting) return
+    setActing(true)
     setError('')
-    if (!room) return
     try {
       // Check duplicate name (excluding self)
       const nameTaken = players.some(p => p.user_id !== userId && p.name?.toLowerCase() === name.toLowerCase())
@@ -134,10 +137,13 @@ export default function Lobby() {
         { onConflict: 'room_id,user_id' }
       )
     } catch (e) { setError(e.message) }
+    finally { setActing(false) }
   }
 
   // For spectators: submit join request
   async function handleJoinRequest(seatNum, name, chips) {
+    if (acting) return
+    setActing(true)
     setError('')
     try {
       await supabase.from('join_requests').upsert({
@@ -146,10 +152,15 @@ export default function Lobby() {
         desired_chips: chips, status: 'pending',
       }, { onConflict: 'room_id,user_id' })
     } catch (e) { setError(e.message) }
+    finally { setActing(false) }
   }
 
   async function handleLeave() {
-    if (myPlayer) await supabase.from('players').delete().eq('id', myPlayer.id)
+    if (acting) return
+    setActing(true)
+    try {
+      if (myPlayer) await supabase.from('players').delete().eq('id', myPlayer.id)
+    } finally { setActing(false) }
     navigate('/')
   }
 
@@ -171,7 +182,8 @@ export default function Lobby() {
   }
 
   async function handleStartGame() {
-    if (!isAdmin || !room) return
+    if (!isAdmin || !room || starting) return  // prevent re-entry
+    setStarting(true)
     setError('')
     try {
       // Use custom_chips per player, fallback to settings.startingChips
@@ -202,7 +214,9 @@ export default function Lobby() {
       await supabase.from('rooms').update({ status: 'playing', game_phase: 'poker' }).eq('id', room.id)
     } catch (e) {
       setError(e.message || 'שגיאה')
+      setStarting(false)  // unlock on failure so admin can retry
     }
+    // On success we don't reset `starting` — the page is about to navigate to /game/:code
   }
 
   if (loading) return (
@@ -275,6 +289,7 @@ export default function Lobby() {
         onLeave={handleLeave}
         onShuffle={handleShuffle}
         onStartGame={handleStartGame}
+        starting={starting}
         roomCode={code}
         onOpenSettings={() => setShowSettings(true)}
       />

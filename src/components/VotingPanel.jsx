@@ -51,7 +51,7 @@ export default function VotingPanel({
     }
     load()
     const ch = supabase
-      .channel(`votes:${room.id}:${roundNumber}`)
+      .channel(`votes:${room.id}:${roundNumber}:${Date.now()}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'votes',
         filter: `room_id=eq.${room.id}` }, load)
       .subscribe()

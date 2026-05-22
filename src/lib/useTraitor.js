@@ -44,7 +44,7 @@ export function useTraitor({ roomId, roundId, settings = {}, myPlayerId, onRevea
     load()
 
     const ch = supabase
-      .channel(`use-traitor-state:${roomId}:${roundId ?? 'lobby'}`)
+      .channel(`use-traitor-state:${roomId}:${roundId ?? 'lobby'}:${Date.now()}`)
       .on('postgres_changes',
           { event: '*', schema: 'public', table: 'traitor_state', filter: `room_id=eq.${roomId}` },
           load)
@@ -66,7 +66,7 @@ export function useTraitor({ roomId, roundId, settings = {}, myPlayerId, onRevea
     }
     load()
     const ch = supabase
-      .channel(`use-traitor-actions:${roundId}`)
+      .channel(`use-traitor-actions:${roundId}:${Date.now()}`)
       .on('postgres_changes',
           { event: '*', schema: 'public', table: 'traitor_actions', filter: `round_id=eq.${roundId}` },
           load)
