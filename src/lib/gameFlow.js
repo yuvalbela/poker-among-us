@@ -238,9 +238,21 @@ export async function takeAction({ roundId, playerId, action, raiseTo = 0 }) {
   const nextSeat = nextActiveSeat(updatedHands, myHand.seat_index)
   const allMatched = activeHands.every((h) => h.current_bet === newCurrentBet)
 
-  // Has the "closer" (lastRaiseIndex) acted voluntarily in this phase?
+  // The "closer" is the seat last_raise_index points to. If that player is no
+  // longer active (went all-in earlier), the action loop can never literally
+  // "return to" them — they're skipped by nextActiveSeat. In that case we use
+  // the previous active seat as the effective closer (the active player who
+  // sits right before the all-in raiser in seat order). That makes
+  // actionReturnedToCloser meaningful again.
+  const rawCloserHand = updatedHands.find((h) => h.seat_index === newLastRaise)
+  let effectiveCloserSeat = newLastRaise
+  if (rawCloserHand && rawCloserHand.status !== 'active') {
+    effectiveCloserSeat = prevActiveSeat(updatedHands, newLastRaise) ?? newLastRaise
+  }
+  const closerHand = updatedHands.find((h) => h.seat_index === effectiveCloserSeat)
+
+  // Has the (effective) closer acted voluntarily in this phase?
   // Blinds count as forced action — BB still has option preflop.
-  const closerHand = updatedHands.find((h) => h.seat_index === newLastRaise)
   let closerActed = false
   if (closerHand) {
     if (closerHand.player_id === myHand.player_id) {
@@ -256,7 +268,7 @@ export async function takeAction({ roundId, playerId, action, raiseTo = 0 }) {
     }
   }
 
-  const actionReturnedToCloser = nextSeat === newLastRaise || myHand.seat_index === newLastRaise
+  const actionReturnedToCloser = nextSeat === effectiveCloserSeat || myHand.seat_index === effectiveCloserSeat
   const bettingDone = !raised && allMatched && closerActed && actionReturnedToCloser
 
   if (bettingDone) {
