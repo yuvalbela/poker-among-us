@@ -1,47 +1,4 @@
-import { RANK_CHAR, SUIT_SYMBOL } from '../lib/pokerLogic.js'
-import MaskIcon from './MaskIcon.jsx'
-
-function CardBack({ small = false }) {
-  const sz = small ? 'w-11 h-16' : 'w-14 h-20'
-  return (
-    <div className={`${sz} rounded-md flex items-center justify-center shadow-md`}
-      style={{
-        background: 'linear-gradient(145deg, #b91c1c, #7f1d1d)',
-        border: '2px solid rgba(255,255,255,0.9)',
-        boxShadow: '0 0 0 1px rgba(0,0,0,0.3)',
-      }}>
-      <MaskIcon style={{ width: '70%', height: 'auto', opacity: 0.5 }} />
-    </div>
-  )
-}
-
-function CardFace({ card, flipping = false, small = false }) {
-  if (!card) return <CardBack small={small} />
-  const isRed = card.suit === 'h' || card.suit === 'd'
-  const rank = RANK_CHAR[card.rank] || String(card.rank)
-  const suit = SUIT_SYMBOL[card.suit]
-  const color = isRed ? '#dc2626' : '#111'
-  const sz = small ? 'w-11 h-16' : 'w-14 h-20'
-  const rankSize = small ? '12px' : '15px'
-  const suitSize = small ? '10px' : '13px'
-  const centerSize = small ? '26px' : '34px'
-  return (
-    <div className={`${sz} rounded-md bg-white border border-gray-200 relative shadow ${flipping ? 'animate-flip' : ''}`}
-      style={{ borderColor: '#d1d5db' }}>
-      {/* Top-left: rank + suit small */}
-      <div className="absolute top-0.5 left-1 flex flex-col items-center leading-none"
-        style={{ color }}>
-        <span style={{ fontSize: rankSize, fontWeight: 800, lineHeight: 1 }}>{rank}</span>
-        <span style={{ fontSize: suitSize, lineHeight: 1 }}>{suit}</span>
-      </div>
-      {/* Center: large suit */}
-      <div className="absolute inset-0 flex items-center justify-center"
-        style={{ color, fontSize: centerSize, lineHeight: 1 }}>
-        {suit}
-      </div>
-    </div>
-  )
-}
+import CardFace, { CardBack } from './CardFace.jsx'
 
 export default function PlayerSeat({
   player, hand, cards, revealedCards,
@@ -107,7 +64,7 @@ export default function PlayerSeat({
                 animation: clickable ? 'traitor-pulse 1.5s ease-in-out infinite' : undefined,
               }}
               onClick={clickable ? (e) => { e.stopPropagation(); onCardClick(i) } : undefined}>
-                <CardFace card={c} small={small} />
+                <CardFace card={c} size={small ? 'sm' : 'md'} />
               </div>
             )
           })}
@@ -142,8 +99,8 @@ export default function PlayerSeat({
                 onClick={clickable ? (e) => { e.stopPropagation(); onCardClick(i) } : undefined}
               >
                 {visibleCard
-                  ? <CardFace card={visibleCard} flipping={!!revealed && !showdownCard} small={small} />
-                  : <CardBack small={small} />
+                  ? <CardFace card={visibleCard} flipping={!!revealed && !showdownCard} size={small ? 'sm' : 'md'} />
+                  : <CardBack size={small ? 'sm' : 'md'} />
                 }
               </div>
             )

@@ -4,6 +4,7 @@
 
 import { createDeck, shuffle, bestHandFor, compareEval, HAND_CATEGORIES } from './pokerLogic.js'
 import { supabase } from './supabase.js'
+import { computeSidePots } from './sidePots.js'
 
 async function loadState(roundId) {
   const [{ data: round }, { data: hands }] = await Promise.all([
@@ -219,6 +220,20 @@ export async function takeAction({ roundId, playerId, action, raiseTo = 0 }) {
   if (activeHands.length === 0) {
     return runOutAndShowdown(round, updatedHands, newPot, newCurrentBet)
   }
+  // Only one active player remains AND they've already matched the current
+  // bet — no one left to act against and the active player is square with the
+  // pot, so deal out the remaining community cards straight to showdown.
+  // (We MUST also check current_bet >= newCurrentBet, otherwise this would
+  // trigger when the SOLE active player still owes a call after an all-in,
+  // which is the case "the other player just went all-in and it's now my
+  // turn to call or fold".)
+  if (
+    activeHands.length === 1
+    && notFolded.length > 1
+    && activeHands[0].current_bet >= newCurrentBet
+  ) {
+    return runOutAndShowdown(round, updatedHands, newPot, newCurrentBet)
+  }
 
   const nextSeat = nextActiveSeat(updatedHands, myHand.seat_index)
   const allMatched = activeHands.every((h) => h.current_bet === newCurrentBet)
@@ -338,51 +353,66 @@ async function doShowdown(round, hands, pot) {
   await supabase.from('game_rounds').update({ phase: 'showdown' }).eq('id', round.id)
 
   const contenders = hands.filter((h) => h.status !== 'folded')
+  // We need hole cards for all NON-FOLDED hands (folded never need evaluation).
   const { data: holeRows } = await supabase
     .from('player_hole_cards')
     .select('player_hand_id, cards')
     .in('player_hand_id', contenders.map((h) => h.id))
   const cardsById = new Map((holeRows || []).map((r) => [r.player_hand_id, r.cards]))
 
-  const evaluations = contenders.map((h) => ({
-    hand: h,
-    eval: bestHandFor(cardsById.get(h.id) || [], round.community_cards),
-  }))
-  let best = evaluations[0]
-  const winners = [best]
-  for (let i = 1; i < evaluations.length; i++) {
-    const cmp = compareEval(evaluations[i].eval, best.eval)
-    if (cmp > 0) {
-      best = evaluations[i]
-      winners.length = 0
-      winners.push(best)
-    } else if (cmp === 0) {
-      winners.push(evaluations[i])
-    }
+  const evaluationByHandId = new Map()
+  for (const h of contenders) {
+    evaluationByHandId.set(h.id, bestHandFor(cardsById.get(h.id) || [], round.community_cards))
   }
 
-  const share = Math.floor(pot / winners.length)
-  const remainder = pot - share * winners.length
-  for (let i = 0; i < winners.length; i++) {
-    const wid = winners[i].hand.player_id
-    const extra = i === 0 ? remainder : 0
-    // Atomic add — see adjust_player_chips comment in takeAction.
-    await supabase.rpc('adjust_player_chips', { p_player_id: wid, p_delta: share + extra })
+  // Build side pots from EVERY hand's total contribution (including folded
+  // ones — their chips stay in the pot but they're excluded from winning).
+  const sidePots = computeSidePots(hands, evaluationByHandId)
+
+  // Award chips per pot. Within a pot, ties split evenly with remainder to first.
+  // Collect all unique winners' names for the headline + a structured breakdown
+  // for the UI.
+  const allWinnerNames = new Set()
+  const breakdown = []
+  for (let i = 0; i < sidePots.length; i++) {
+    const p = sidePots[i]
+    if (!p.winners.length) continue
+    const share = Math.floor(p.amount / p.winners.length)
+    const remainder = p.amount - share * p.winners.length
+    const winnerPlayerIds = p.winners.map((w) => w.player_id)
+    const { data: winnerPlayers } = await supabase
+      .from('players').select('id, name').in('id', winnerPlayerIds)
+    const namesById = new Map((winnerPlayers || []).map((wp) => [wp.id, wp.name]))
+    for (let j = 0; j < p.winners.length; j++) {
+      const w = p.winners[j]
+      const extra = j === 0 ? remainder : 0
+      await supabase.rpc('adjust_player_chips', { p_player_id: w.player_id, p_delta: share + extra })
+      const name = namesById.get(w.player_id)
+      if (name) allWinnerNames.add(name)
+    }
+    breakdown.push({
+      label: i === 0 ? 'main' : `side${i}`,
+      amount: p.amount,
+      winners: p.winners.map((w) => namesById.get(w.player_id) || '?'),
+      hand_category: p.winningEval ? HAND_CATEGORIES[p.winningEval.category] : null,
+    })
   }
-  // Get winner names for display
-  const winnerPlayerIds = winners.map(w => w.hand.player_id)
-  const { data: winnerPlayers } = await supabase
-    .from('players').select('id, name').in('id', winnerPlayerIds)
-  const winnerNamesStr = (winnerPlayers || []).map(p => p.name).join(', ')
+
+  // Headline win_reason — based on the MAIN pot's winning hand.
+  const mainWinner = sidePots[0]
+  const headlineCategory = mainWinner?.winningEval
+    ? HAND_CATEGORIES[mainWinner.winningEval.category]
+    : null
+  const isSplitMain = mainWinner ? mainWinner.winners.length > 1 : false
 
   await supabase.from('game_rounds').update({
     phase: 'showdown',
     pot,
     ended_at: new Date().toISOString(),
-    winner_name: winnerNamesStr || null,
-    win_reason: winners.length > 1 ? 'split' : HAND_CATEGORIES[best.eval.category],
+    winner_name: [...allWinnerNames].join(', ') || null,
+    win_reason: isSplitMain ? 'split' : headlineCategory,
+    pot_breakdown: breakdown,
   }).eq('id', round.id)
-
 }
 
 async function finishOneWinner(round, hands, winnerHand, pot) {

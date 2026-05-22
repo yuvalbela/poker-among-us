@@ -64,12 +64,13 @@ export default function Lobby() {
   const [currentRound, setCurrentRound] = useState(null)
   const [myJoinRequest, setMyJoinRequest] = useState(null)
 
-  // When game is playing: if I'm already a player → redirect to game
-  // If I'm a spectator → stay and show spectator seating view
+  // When game is playing: if I'm already a player → redirect to game.
+  // Broke players (left_game=true with no chips) are treated as spectators
+  // so they see the join-request form instead of the seating UI.
   useEffect(() => {
     if (room?.status !== 'playing') return
-    const isInGame = players.some(p => p.user_id === userId)
-    if (isInGame) navigate(`/game/${code}`)
+    const isActive = players.some(p => p.user_id === userId && !p.left_game)
+    if (isActive) navigate(`/game/${code}`)
   }, [room?.status, players, userId, code, navigate])
 
   // Fetch current round info for spectator view
@@ -232,8 +233,10 @@ export default function Lobby() {
     </div>
   )
 
-  // Spectator view: game running but I'm not a player yet
-  const isSpectator = room?.status === 'playing' && !players.some(p => p.user_id === userId)
+  // Spectator view: game running and I'm not an ACTIVE player. Covers both
+  // "never joined" spectators and "left_game / out of chips" rebuyers.
+  const isSpectator = room?.status === 'playing'
+    && !players.some(p => p.user_id === userId && !p.left_game)
   if (isSpectator && room) {
     return (
       <>

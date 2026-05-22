@@ -198,13 +198,24 @@ export default function ActionPanel({
           </button>
         )}
 
-        {/* CALL / BET — leftmost of the action triplet */}
+        {/* CALL / BET — leftmost of the action triplet.
+            When the call amount exceeds the chips we actually have, the action
+            becomes an all-in for whatever's left. Show that on the button so
+            the player isn't misled into thinking they're paying the full call. */}
         {callAmount > 0 ? (
-          <button onClick={() => onAction('call')} disabled={busy}
-            className={btnBase}
-            style={{ background: '#2d7a3c', color: 'white', border: 'none' }}>
-            CALL {callAmount}
-          </button>
+          (() => {
+            const isAllInCall = callAmount >= chipsLeft && chipsLeft > 0
+            return (
+              <button onClick={() => onAction('call')} disabled={busy || chipsLeft <= 0}
+                className={btnBase}
+                style={{
+                  background: isAllInCall ? '#9333ea' : '#2d7a3c',
+                  color: 'white', border: 'none',
+                }}>
+                {isAllInCall ? `ALL-IN ${chipsLeft}` : `CALL ${callAmount}`}
+              </button>
+            )
+          })()
         ) : (
           <button onClick={initBet} disabled={busy || chipsLeft <= 0}
             className={btnBase}

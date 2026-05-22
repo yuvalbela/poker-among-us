@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import Card from './Card.jsx'
+import CardFace from './CardFace.jsx'
 import MaskIcon from './MaskIcon.jsx'
 import PlayerSeat from './PlayerSeat.jsx'
 
@@ -188,30 +188,47 @@ export default function PokerTable({
     // seat after a player left" bug, since unfiltered players list was off-by-one.
     const { seatPos } = computeSeatLayout(players, hands, me?.id, isLandscape)
 
-    // Pick actual winners (not just everyone who didn't fold).
-    // round.winner_name is a comma-joined list of winner names (single name for
-    // a clear win, multiple for a split). Fallback: any non-folded hand.
-    const winnerNames = (round.winner_name || '')
-      .split(',').map((s) => s.trim()).filter(Boolean)
-    let winnerHands
-    if (winnerNames.length) {
-      winnerHands = hands.filter((h) => {
-        const p = players.find((p) => p.id === h.player_id)
-        return p && winnerNames.includes(p.name)
-      })
+    // Prefer the structured side-pot breakdown if available (each layer has
+    // its own amount + winners). Falls back to the legacy "winner_name list
+    // splits the whole pot evenly" path for rounds saved before side pots existed.
+    const breakdown = Array.isArray(round.pot_breakdown) ? round.pot_breakdown : null
+    const targets = []
+    if (breakdown && breakdown.length) {
+      for (const layer of breakdown) {
+        if (!layer.amount || !layer.winners?.length) continue
+        const share = Math.floor(layer.amount / layer.winners.length)
+        for (const wname of layer.winners) {
+          const player = players.find((p) => p.name === wname)
+          if (!player) continue
+          const [px, py] = seatPos[player.id] || [50, 50]
+          targets.push({ tx: px, ty: py, amount: share })
+        }
+      }
+    } else {
+      const winnerNames = (round.winner_name || '')
+        .split(',').map((s) => s.trim()).filter(Boolean)
+      let winnerHands
+      if (winnerNames.length) {
+        winnerHands = hands.filter((h) => {
+          const p = players.find((p) => p.id === h.player_id)
+          return p && winnerNames.includes(p.name)
+        })
+      }
+      if (!winnerHands || !winnerHands.length) {
+        winnerHands = hands.filter((h) => h.status !== 'folded')
+      }
+      if (winnerHands.length) {
+        const share = Math.floor(round.pot / winnerHands.length)
+        for (const h of winnerHands) {
+          const [px, py] = seatPos[h.player_id] || [50, 50]
+          targets.push({ tx: px, ty: py, amount: share })
+        }
+      }
     }
-    if (!winnerHands || !winnerHands.length) {
-      winnerHands = hands.filter((h) => h.status !== 'folded')
-    }
-    if (!winnerHands.length) return
-    const share = Math.floor(round.pot / winnerHands.length)
-    const targets = winnerHands.map((h) => {
-      const [px, py] = seatPos[h.player_id] || [50, 50]
-      return { tx: px, ty: py, amount: share }
-    })
+    if (!targets.length) return
     setPotAnim(targets)
     setTimeout(() => setPotAnim(null), 1200)
-  }, [phase, round?.winner_name, round?.id])
+  }, [phase, round?.winner_name, round?.id, round?.pot_breakdown])
 
   // --- Bet → pot animation: fire a chip when a player's current_bet increases ---
   useEffect(() => {
@@ -348,14 +365,28 @@ export default function PokerTable({
 
         {/* Community cards + pot */}
         <div className="absolute inset-0 flex flex-col items-center justify-center gap-1 pointer-events-none">
-          {round?.community_cards?.length > 0 && (
-            <div className="flex gap-1">
-              {Array.from({ length: 5 }).map((_, i) => (
-                <Card key={i} card={round.community_cards[i]} hidden={!round.community_cards[i]}
-                  small={!isLandscape} />
-              ))}
-            </div>
-          )}
+          {/* Always render 5 fixed-size slots so existing flop/turn cards don't
+              shift sideways when a new card is dealt. The CardFace mounts INSIDE
+              its slot only when that index becomes a real card, so the deal
+              animation runs only for newly-dealt cards. */}
+          <div className="flex gap-1">
+            {Array.from({ length: 5 }).map((_, i) => {
+              const card = round?.community_cards?.[i]
+              const slotSize = isLandscape ? 'w-16 h-24' : 'w-14 h-20'
+              return (
+                <div key={i} className={slotSize}>
+                  {card && (
+                    <CardFace
+                      key={`${card.rank}-${card.suit}`}
+                      card={card}
+                      size={isLandscape ? 'lg' : 'md'}
+                      dealing
+                    />
+                  )}
+                </div>
+              )
+            })}
+          </div>
           {round && (
             <div className="bg-black/40 text-amber-300 font-bold px-3 py-0.5 rounded-full text-sm">
               {round.pot > 0 ? `${round.pot}` : ''}

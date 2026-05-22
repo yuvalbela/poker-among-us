@@ -292,6 +292,24 @@ export default function Game() {
     return () => { cancelled = true; supabase.removeChannel(ch) }
   }, [room?.id, userId])
 
+  // When my join request gets approved (mirroring Lobby behavior so a broke
+  // player rejoining mid-game doesn't need to navigate back to the lobby):
+  // upsert myself back into players with the admin-set chips and seat,
+  // clearing left_game.
+  useEffect(() => {
+    if (myJoinRequest?.status !== 'approved' || !room?.id || !userId) return
+    const chips = myJoinRequest.admin_chips ?? myJoinRequest.desired_chips ?? 1000
+    supabase.from('players').upsert({
+      room_id: room.id,
+      user_id: userId,
+      name: myJoinRequest.player_name,
+      seat_number: myJoinRequest.desired_seat,
+      chips,
+      custom_chips: chips,
+      left_game: false,
+    }, { onConflict: 'room_id,user_id' })
+  }, [myJoinRequest?.status, room?.id, userId])
+
   // Clear unread when chat opens
   useEffect(() => {
     if (chatOpen) {
@@ -450,7 +468,17 @@ export default function Game() {
         .single()
       // Re-fetch players fresh from DB to get latest left_game status
       const { data: freshPlayers } = await supabase.from('players').select('*').eq('room_id', room.id)
-      const activePlayers = (freshPlayers || players).filter(p => !p.left_game && (p.chips ?? 0) > 0)
+      // Anyone who lost all their chips this round becomes a spectator. We mark
+      // them left_game so the game treats them as "out" but keep the record so
+      // round history + chat names stay intact; they can submit a join request
+      // to re-buy and rejoin.
+      const broke = (freshPlayers || players).filter(p => !p.left_game && (p.chips ?? 0) <= 0)
+      if (broke.length) {
+        await Promise.all(broke.map(p =>
+          supabase.from('players').update({ left_game: true }).eq('id', p.id)
+        ))
+      }
+      const activePlayers = (freshPlayers || players).filter(p => !p.left_game && (p.chips ?? 0) > 0 && !broke.some(b => b.id === p.id))
       const dealerIndex = ((lastRound?.dealer_index ?? 0) + 1) % Math.max(1, activePlayers.length)
       await startNewRound({
         roomId: room.id,
@@ -471,8 +499,11 @@ export default function Game() {
     return <div className="min-h-screen flex items-center justify-center text-emerald-100">טוען משחק...</div>
   }
 
-  // Spectator / rejoining player view
-  if (!me) {
+  // Spectator / rejoining player view — also covers existing players who ran
+  // out of chips (left_game=true with no chips). We treat them as spectators
+  // so they can submit a fresh join request and re-buy in.
+  const meBroke = me && me.left_game && (me.chips ?? 0) <= 0
+  if (!me || meBroke) {
     return (
       <div style={{ height: '100dvh', display: 'flex', flexDirection: 'column', background: '#111118', overflow: 'hidden' }}>
         <div className="flex items-center justify-between px-3 py-2" style={{ flexShrink: 0 }}>
@@ -480,6 +511,12 @@ export default function Game() {
           <div className="text-amber-400 font-mono font-bold">{code}</div>
           <div className="w-12" />
         </div>
+        {meBroke && (
+          <div className="px-3 py-2 text-center text-xs text-amber-200"
+            style={{ background: 'rgba(180,130,0,0.18)', borderBottom: '1px solid rgba(180,130,0,0.35)' }}>
+            💸 נגמרו לך הצ'יפים — שלח בקשת חזרה לאדמין כדי לקנות עוד ולהמשיך.
+          </div>
+        )}
         {/* Spectator table view */}
         <div style={{ flex: 1, minHeight: 0, position: 'relative', overflow: 'hidden' }}>
           <div style={{ position: 'absolute', inset: '0 4px' }}>
@@ -540,18 +577,45 @@ export default function Game() {
               table above doesn't shift when banners/traitor/buttons appear/disappear.
               Slots are tuned to the minimum that prevents visible jiggle. ── */}
       <div style={{ flexShrink: 0, padding: '2px 8px 6px' }}>
-        {/* Banner slot — winner banner only shows at round end */}
+        {/* Banner slot — winner banner only shows at round end. With side pots,
+            we render a structured per-pot breakdown; otherwise the simple "X ניצח" line. */}
         <div style={{ minHeight: '24px' }}>
-          {(round.phase === 'showdown' || round.phase === 'finished') && round.winner_name && (
-            <div className="rounded-lg px-3 py-1 text-center text-xs font-bold"
-              style={{ background: 'rgba(180,130,0,0.2)', border: '1px solid rgba(180,130,0,0.4)', color: '#f0c040' }}>
-              🏆 {round.winner_name} ניצח
-              {round.win_reason === 'fold' && ' · כולם פולד'}
-              {round.win_reason === 'split' && ' · תיקו'}
-              {round.win_reason && round.win_reason !== 'fold' && round.win_reason !== 'split' && ` · ${round.win_reason}`}
-              {' '}({round.pot} 💰)
-            </div>
-          )}
+          {(round.phase === 'showdown' || round.phase === 'finished') && round.winner_name && (() => {
+            const pots = Array.isArray(round.pot_breakdown) ? round.pot_breakdown : []
+            const multiPot = pots.length >= 2
+            const bannerCss = {
+              background: 'rgba(180,130,0,0.2)',
+              border: '1px solid rgba(180,130,0,0.4)',
+              color: '#f0c040',
+            }
+            if (multiPot) {
+              // One row per pot: "Main 600 · Alice (Two Pair)"
+              return (
+                <div className="rounded-lg px-3 py-1 text-[11px] font-bold space-y-0.5" style={bannerCss}>
+                  {pots.map((p, i) => {
+                    const label = p.label === 'main' ? 'Main' : p.label.replace('side', 'Side ')
+                    const winners = (p.winners || []).join(', ')
+                    return (
+                      <div key={i} className="flex justify-between items-center">
+                        <span>🏆 {label}: {winners}{p.hand_category ? ` (${p.hand_category})` : ''}</span>
+                        <span className="text-amber-300">{p.amount} 💰</span>
+                      </div>
+                    )
+                  })}
+                </div>
+              )
+            }
+            // Single pot — keep the original compact one-line banner
+            return (
+              <div className="rounded-lg px-3 py-1 text-center text-xs font-bold" style={bannerCss}>
+                🏆 {round.winner_name} ניצח
+                {round.win_reason === 'fold' && ' · כולם פולד'}
+                {round.win_reason === 'split' && ' · תיקו'}
+                {round.win_reason && round.win_reason !== 'fold' && round.win_reason !== 'split' && ` · ${round.win_reason}`}
+                {' '}({round.pot} 💰)
+              </div>
+            )
+          })()}
         </div>
 
         {/* Join requests — admin only */}

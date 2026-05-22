@@ -26,3 +26,15 @@ body {
   0%, 100% { box-shadow: 0 0 0 2px #ef4444, 0 0 8px rgba(239,68,68,0.5); }
   50%      { box-shadow: 0 0 0 3px #ef4444, 0 0 18px rgba(239,68,68,0.9); }
 }
+
+/* Community-card deal-in animation — slides from above with a flip + scale. */
+@keyframes deal {
+  0%   { opacity: 0; transform: translateY(-40%) rotateY(90deg) scale(0.7); }
+  60%  { opacity: 1; transform: translateY(0) rotateY(-15deg) scale(1.05); }
+  100% { opacity: 1; transform: translateY(0) rotateY(0deg) scale(1); }
+}
+.animate-deal {
+  animation: deal 0.55s cubic-bezier(0.2, 0.8, 0.3, 1.1) both;
+  transform-style: preserve-3d;
+  backface-visibility: hidden;
+}
