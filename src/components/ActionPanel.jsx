@@ -220,7 +220,7 @@ export default function ActionPanel({
           <button onClick={initBet} disabled={busy || chipsLeft <= 0}
             className={btnBase}
             style={{ background: '#2d7a3c', color: 'white', border: 'none' }}>
-            BET {minRaise}
+            BET
           </button>
         )}
 

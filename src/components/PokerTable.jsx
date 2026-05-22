@@ -9,12 +9,16 @@ import PlayerSeat from './PlayerSeat.jsx'
 // (cards 88 + seat box 26 + bet chip 20 + chat bubble 30). Each seat is
 // centered with translate(-50%, -50%), so the box extends ~75px above/below
 // its center. We keep extreme seats away from 0/100% edges to avoid clipping.
+// PORTRAIT (mobile): seat centers as [xPct, yPct]. Side seats are pulled
+// INWARD (x=15%/85%) so the player + their hole cards stay fully inside the
+// viewport on phones, and shifted DOWN out of the y=50% band so they don't
+// sit on top of the row of community cards.
 const PORTRAIT_POSITIONS = {
   2: [[50, 85], [50, 17]],
-  3: [[50, 85], [10, 17], [90, 17]],
-  4: [[50, 85], [7, 50],  [50, 17], [93, 50]],
-  5: [[50, 85], [7, 65],  [10, 19], [90, 19], [93, 65]],
-  6: [[50, 85], [7, 70],  [7, 24],  [50, 17], [93, 24], [93, 70]],
+  3: [[50, 85], [15, 20], [85, 20]],
+  4: [[50, 85], [15, 70], [50, 17], [85, 70]],
+  5: [[50, 85], [15, 68], [15, 22], [85, 22], [85, 68]],
+  6: [[50, 85], [15, 70], [15, 28], [50, 17], [85, 28], [85, 70]],
 }
 
 const LANDSCAPE_POSITIONS = {
@@ -379,7 +383,7 @@ export default function PokerTable({
                     <CardFace
                       key={`${card.rank}-${card.suit}`}
                       card={card}
-                      size={isLandscape ? 'lg' : 'md'}
+                      size={isLandscape ? 'lg' : 'sm'}
                       dealing
                     />
                   )}

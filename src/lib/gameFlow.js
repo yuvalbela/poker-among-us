@@ -5,6 +5,7 @@
 import { createDeck, shuffle, bestHandFor, compareEval, HAND_CATEGORIES } from './pokerLogic.js'
 import { supabase } from './supabase.js'
 import { computeSidePots } from './sidePots.js'
+import { nextActiveSeat as _nextActiveSeat, prevActiveSeat as _prevActiveSeat } from './turnOrder.js'
 
 async function loadState(roundId) {
   const [{ data: round }, { data: hands }] = await Promise.all([
@@ -14,25 +15,8 @@ async function loadState(roundId) {
   return { round, hands: hands || [] }
 }
 
-function nextActiveSeat(hands, fromSeat) {
-  const n = hands.length
-  for (let step = 1; step <= n; step++) {
-    const seat = (fromSeat + step) % n
-    const h = hands.find((x) => x.seat_index === seat)
-    if (h && h.status === 'active') return seat
-  }
-  return null
-}
-
-function prevActiveSeat(hands, fromSeat) {
-  const n = hands.length
-  for (let step = 1; step <= n; step++) {
-    const seat = (fromSeat - step + n) % n
-    const h = hands.find((x) => x.seat_index === seat)
-    if (h && h.status === 'active') return seat
-  }
-  return null
-}
+const nextActiveSeat = _nextActiveSeat
+const prevActiveSeat = _prevActiveSeat
 
 export async function startNewRound({ roomId, players, settings = {}, roundNumber = 1, dealerIndex = 0 }) {
   const smallBlind = settings.smallBlind ?? 10

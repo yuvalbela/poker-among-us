@@ -66,6 +66,43 @@ function SeatButton({ seatNum, player, isMe, onClick }) {
   )
 }
 
+/**
+ * Share-link button: uses the Web Share API on devices that support it
+ * (mobile) and falls back to copying the URL to the clipboard otherwise.
+ * Anyone who opens the link lands directly in /room/CODE (this lobby),
+ * skipping the home-screen code entry.
+ */
+function ShareButton({ roomCode }) {
+  const [copied, setCopied] = useState(false)
+  async function handleShare() {
+    const url = `${window.location.origin}/room/${roomCode}`
+    const text = `הצטרפו אליי ל-Impoker בחדר ${roomCode}: ${url}`
+    try {
+      if (navigator.share) {
+        await navigator.share({ title: 'Impoker', text, url })
+        return
+      }
+    } catch (e) { /* user cancelled — fall through to copy */ }
+    try {
+      await navigator.clipboard.writeText(url)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    } catch (e) { /* clipboard blocked — ignore */ }
+  }
+  return (
+    <button onClick={handleShare}
+      className="px-2.5 py-1 rounded-md text-[11px] font-bold transition-all active:scale-95 whitespace-nowrap"
+      style={{
+        background: copied ? 'rgba(34,197,94,0.25)' : 'rgba(234,179,8,0.18)',
+        border: `1px solid ${copied ? '#22c55e' : 'rgba(234,179,8,0.45)'}`,
+        color: copied ? '#86efac' : '#fbbf24',
+        minWidth: '64px',
+      }}>
+      {copied ? '✓ הועתק' : '🔗 שתף'}
+    </button>
+  )
+}
+
 export default function SeatingLobby({
   room, players, me, isAdmin,
   isSpectator = false, currentRound = null, myJoinRequest = null,
@@ -141,7 +178,7 @@ export default function SeatingLobby({
           <div className="text-white/40 text-[10px]">קוד חדר</div>
           <div className="text-amber-400 font-mono font-bold text-lg tracking-widest">{roomCode}</div>
         </div>
-        <div className="w-16" />
+        <ShareButton roomCode={roomCode} />
       </div>
 
       {/* Table with seats — fills all space except header and controls */}
